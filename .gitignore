@@ -1,0 +1,22 @@
+# Virtual environments
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing / Coverage
+.cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.json
+
+# Local custom folders
+scratch/
+
+# OS files
+.DS_Store

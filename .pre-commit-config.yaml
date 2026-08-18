@@ -1,0 +1,65 @@
+repos:
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.16.5
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0  # Use the latest stable version
+    hooks:
+      - id: trailing-whitespace      # Trims unnecessary trailing whitespace
+      - id: end-of-file-fixer        # Ensures files end with a newline character
+      - id: check-yaml               # Validates syntax for your yaml configuration files
+      - id: check-added-large-files  # Prevents accidentally staging gigantic binaries (>500KB)
+      - id: no-commit-to-branch      # Prevents direct commits to main/master branches
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.49.1
+    hooks:
+      - id: markdownlint
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.9.1
+    hooks:
+      - id: nbstripout
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: Ruff lint check
+        # --fix: Automatically fix safe violations (like unused imports) on stage
+        entry: uv run ruff check . --fix
+        language: system
+        types: [python]
+        stages: [pre-commit]
+        pass_filenames: false  # rescan global workspace path (.)
+      - id: ruff-format
+        name: Ruff code autoformat
+        entry: uv run ruff format .
+        language: system
+        types: [python]
+        stages: [pre-commit]
+        pass_filenames: false
+      - id: docformatter
+        name: Docformatter autoformat
+        entry: uv run docformatter --in-place -r src tests
+        language: system
+        types: [python]
+        stages: [pre-commit]
+        pass_filenames: false
+      - id: pydoclint
+        name: Pydoclint signature check
+        entry: uv run pydoclint src tests
+        language: system
+        types: [python]
+        stages: [pre-commit]
+        pass_filenames: false
+      - id: ty-check
+        name: ty type check
+        entry: uv run ty check
+        language: system
+        types: [python]
+        stages: [pre-commit]
+        pass_filenames: false
+  - repo: https://github.com/commit-check/commit-check
+    rev: v2.12.0
+    hooks:
+      - id: check-branch
+        stages: [pre-push]

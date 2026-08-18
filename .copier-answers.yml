@@ -1,0 +1,12 @@
+# Changes here will be overwritten by Copier; DO NOT EDIT.
+_commit: v0.4.0
+_src_path: .
+author_email: carlos@firnresearch.com
+author_name: Carlos Ezequiel
+github_username: cfezequiel
+package_name: vrollout
+project_description: Distributed RL rollout engine
+project_slug: vrollout
+project_title: vRollout
+python_version: '>=3.12'
+typechecker: ty

@@ -1,0 +1,4 @@
+[branch]
+conventional_branch = true
+allow_branch_types = ["feat", "feature", "fix", "bugfix", "infra", "chore", "docs", "test", "perf"]
+allow_branch_names = ["main", "master", "dev", "development"]

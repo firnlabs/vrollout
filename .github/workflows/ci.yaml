@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    name: Code quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run commit-check
+        uses: commit-check/commit-check-action@v2
+        with:
+          message: false
+          branch: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Install notebook dependencies
+        run: uv sync --locked --group notebook
+
+      - name: Run static code analysis (pre-commit)
+        uses: pre-commit/action@v3.0.1
+        env:
+          SKIP: no-commit-to-branch
+
+      - name: Run tests with coverage
+        run: uv run pytest tests/ --cov=vrollout --cov-report=term-missing --cov-report=xml --cov-report=json
+
+      - name: Run coverage threshold check
+        run: uv run coverage-threshold
+
+      # Uncomment the steps below if you want to use Codecov for coverage tracking
+      # - name: Upload coverage reports to Codecov
+      #   uses: codecov/codecov-action@v5
+      #   with:
+      #     token: ${{ secrets.CODECOV_TOKEN }}

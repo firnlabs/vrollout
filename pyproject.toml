@@ -1,0 +1,118 @@
+[project]
+name = "vrollout"
+version = "0.1.0"
+description = "Distributed RL rollout engine"
+readme = "README.md"
+authors = [
+    { name = "Carlos Ezequiel", email = "carlos@firnresearch.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+]
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.16.5",
+    "coverage-threshold>=0.6.2",
+    "docformatter>=1.7.8",
+    "pydoclint>=0.9.1",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.20",
+    "ty>=0.0.58",
+]
+notebook = [
+    "ipykernel>=7.3.0",
+    "matplotlib>=3.11.0",
+    "tqdm>=4.68.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--cov=vrollout --cov-report=term-missing --cov-report=html --cov-report=json --import-mode=importlib"
+pythonpath = ["."]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "raise AssertionError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+select = [
+    "E",  # PEP8 errors
+    "W",  # PEP8 warnings
+    "F",  # Pyflakes
+    "I",  # Isort
+    "B",  # flake-bugbear
+    "D",  # pydocstyle rules
+]
+ignore = [
+    "D1",    # Ignore missing docstrings
+    "D203",  # Conflict with D211
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+force-sort-within-sections = true
+order-by-type = false
+known-first-party = ["vrollout"]
+
+[tool.docformatter]
+wrap-summaries = 88
+wrap-descriptions = 88
+pre-summary-newline = false
+make-summary-multi-line = false
+
+[tool.pydoclint]
+style = "google"
+allow-init-docstring = true
+arg-type-hints-in-docstring = false
+arg-type-hints-in-signature = true
+skip-checking-private-functions = true
+check-return-types = false
+check-yield-types = false
+
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.rules]
+invalid-method-override = "ignore"
+blanket-ignore-comment = "warn"
+missing-type-argument = "warn"
+unused-ignore-comment = "warn"
+unused-type-ignore-comment = "warn"
+
+
+[tool.coverage-threshold]
+line_coverage_min = 80
+file_line_coverage_min = 80
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_provider = "pep621"
+message_length_limit = 50
