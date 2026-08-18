@@ -101,7 +101,7 @@ arg-type-hints-in-signature = false
 skip-checking-private-functions = true
 check-return-types = false
 check-yield-types = false
-
+native-mode-noqa-location = "definition"
 
 [tool.ty.environment]
 python-version = "3.12"

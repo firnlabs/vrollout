@@ -28,12 +28,12 @@ except ImportError:
 if TRITON_AVAILABLE:
 
     @triton.jit
-    def vector_add_kernel(
+    def vector_add_kernel(  # noqa: DOC108
         x_ptr,
         y_ptr,
         out_ptr,
         n_elements,
-        BLOCK_SIZE,
+        BLOCK_SIZE: tl.constexpr,
     ):
         """Triton kernel for elementwise vector addition: out = x + y.
 
@@ -65,7 +65,7 @@ if TRITON_AVAILABLE:
         tl.store(out_ptr + offsets, output, mask=mask)
 
 
-def triton_vector_add(x, y, block_size=1024):
+def triton_vector_add(x, y, block_size: int = 1024):  # noqa: DOC108
     """Wrapper function to invoke the Triton vector addition kernel on PyTorch tensors.
 
     Args:
@@ -105,7 +105,7 @@ def triton_vector_add(x, y, block_size=1024):
         y,
         out,
         n_elements,
-        BLOCK_SIZE=block_size,
+        BLOCK_SIZE=block_size,  # ty: ignore[invalid-argument-type]
     )
     return out
 
