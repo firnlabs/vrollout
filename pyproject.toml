@@ -97,7 +97,7 @@ make-summary-multi-line = false
 style = "google"
 allow-init-docstring = true
 arg-type-hints-in-docstring = false
-arg-type-hints-in-signature = true
+arg-type-hints-in-signature = false
 skip-checking-private-functions = true
 check-return-types = false
 check-yield-types = false
@@ -123,3 +123,5 @@ name = "cz_conventional_commits"
 tag_format = "v$version"
 version_provider = "pep621"
 message_length_limit = 50
+
+arg-type-hints-in-signature = false

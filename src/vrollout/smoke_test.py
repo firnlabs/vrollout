@@ -33,7 +33,7 @@ if TRITON_AVAILABLE:
         y_ptr,
         out_ptr,
         n_elements,
-        BLOCK_SIZE: tl.constexpr,
+        BLOCK_SIZE,
     ):
         """Triton kernel for elementwise vector addition: out = x + y.
 
@@ -65,9 +65,7 @@ if TRITON_AVAILABLE:
         tl.store(out_ptr + offsets, output, mask=mask)
 
 
-def triton_vector_add(
-    x: torch.Tensor, y: torch.Tensor, block_size: int = 1024
-) -> torch.Tensor:
+def triton_vector_add(x, y, block_size=1024):
     """Wrapper function to invoke the Triton vector addition kernel on PyTorch tensors.
 
     Args:
@@ -77,6 +75,11 @@ def triton_vector_add(
 
     Returns:
         torch.Tensor: Elementwise sum (x + y) computed via Triton kernel.
+
+    Raises:
+        ImportError: If Triton is not installed.
+        ValueError: If the inputs are not CUDA float32 tensors with matching shapes.
+        TypeError: If the input tensors are not float32 tensors.
     """
     if not TRITON_AVAILABLE:
         raise ImportError("OpenAI Triton is not installed in the current environment.")
@@ -107,7 +110,7 @@ def triton_vector_add(
     return out
 
 
-def run_smoke_test(verbose: bool = True) -> bool:
+def run_smoke_test() -> bool:
     """Runs a complete environment check and Triton vector addition verification.
 
     Tests:
@@ -116,7 +119,7 @@ def run_smoke_test(verbose: bool = True) -> bool:
     3. Non-power-of-two vector length (N=9843) to strictly verify boundary masking.
 
     Returns:
-        bool: True if all parity checks pass within tolerance.
+        True if all parity checks pass within tolerance.
     """
     print("=" * 60)
     print("🔍 [vRollout] GPU & Triton Environment Smoke Test")
