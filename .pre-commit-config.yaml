@@ -46,8 +46,10 @@ repos:
         pass_filenames: false
       - id: pydoclint
         name: Pydoclint signature check
-        entry: uv run pydoclint src tests
-        language: system
+        entry: pydoclint src tests
+        language: python
+        additional_dependencies:
+          - pydoclint==0.9.1
         types: [python]
         stages: [pre-commit]
         pass_filenames: false
