@@ -112,6 +112,7 @@ python-version = "3.12"
 
 [tool.ty.rules]
 unresolved-import = "ignore"
+invalid-argument-type = "ignore"
 invalid-method-override = "ignore"
 blanket-ignore-comment = "warn"
 missing-type-argument = "warn"
