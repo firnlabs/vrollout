@@ -47,6 +47,9 @@ pythonpath = ["."]
 
 [tool.coverage.run]
 branch = true
+omit = [
+    "src/vrollout/triton_smoke_test.py",
+]
 
 [tool.coverage.report]
 fail_under = 80
