@@ -105,7 +105,7 @@ def triton_vector_add(x, y, block_size: int = 1024):  # noqa: DOC108
         y,
         out,
         n_elements,
-        BLOCK_SIZE=block_size,  # ty: ignore[invalid-argument-type]
+        BLOCK_SIZE=block_size,
     )
     return out
 

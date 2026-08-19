@@ -13,8 +13,8 @@ dependencies = [
     "ray>=2.57.0",
     "torch>=2.13.0",
     "transformers>=5.15.0",
-    "triton>=3.7.1",
-    "vllm>=0.27.1",
+    "triton>=3.7.1; sys_platform != 'darwin'",
+    "vllm>=0.27.1; sys_platform != 'darwin'",
 ]
 
 [build-system]
@@ -49,6 +49,7 @@ pythonpath = ["."]
 branch = true
 omit = [
     "src/vrollout/triton_smoke_test.py",
+    "src/vrollout/run_gpu_benchmark.py",
 ]
 
 [tool.coverage.report]
@@ -110,6 +111,8 @@ native-mode-noqa-location = "definition"
 python-version = "3.12"
 
 [tool.ty.rules]
+unresolved-import = "ignore"
+invalid-argument-type = "ignore"
 invalid-method-override = "ignore"
 blanket-ignore-comment = "warn"
 missing-type-argument = "warn"
