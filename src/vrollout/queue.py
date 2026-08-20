@@ -21,7 +21,7 @@ class AsyncQueue:
 
     async def get_batch(self, batch_size: int = 32, timeout: float = 0.1) -> list[Any]:
         batch = []
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
 
         while len(batch) < batch_size:
             # Try to get any items in the queue immediately
@@ -33,7 +33,8 @@ class AsyncQueue:
                 batch.append(item)
                 continue
 
-            time_left = deadline - time.time()
+            # Guard in case elapsed time has already exceeded deadline
+            time_left = deadline - time.monotonic()
             if time_left <= 0:
                 break
 
