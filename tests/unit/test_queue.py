@@ -13,38 +13,38 @@ def queue_size() -> int:
 
 
 @pytest.fixture
-def queue_(queue_size: int) -> queue.AsyncRewardQueue:
-    return queue.AsyncRewardQueue(maxsize=queue_size)
+def queue_(queue_size: int) -> queue.AsyncQueue:
+    return queue.AsyncQueue(maxsize=queue_size)
 
 
-class TestAsyncRewardQueue:
-    """Tests for AsyncRewardQueue class."""
+class TestAsyncQueue:
+    """Tests for AsyncQueue class."""
 
     @pytest.mark.asyncio
-    async def test_put_rollouts(self, queue_: queue.AsyncRewardQueue):
-        rollouts = [1, 2, 3]
+    async def test_put_rollouts(self, queue_: queue.AsyncQueue):
+        items = [1, 2, 3]
 
-        await queue_.put_rollouts(rollouts)
+        await queue_.put_items(items)
 
         results = []
-        for _ in range(len(rollouts)):
+        for _ in range(len(items)):
             item = await asyncio.wait_for(queue_._queue.get(), timeout=2)
             results.append(item)
-        assert results == rollouts
+        assert results == items
 
     @pytest.mark.asyncio
     async def test_get_batch_for_scoring(
-        self, queue_: queue.AsyncRewardQueue, queue_size: int
+        self, queue_: queue.AsyncQueue, queue_size: int
     ):
-        rollouts = list(range(queue_size))
+        items = list(range(queue_size))
         batch_size = 4
-        num_batches = len(rollouts) // batch_size + 1
-        for rollout in rollouts:
+        num_batches = len(items) // batch_size + 1
+        for rollout in items:
             queue_._queue.put_nowait(rollout)
 
         batches = []
         for _ in range(num_batches):
-            batch = await queue_.get_batch_for_scoring(batch_size=batch_size)
+            batch = await queue_.get_batch(batch_size=batch_size)
             batches.append(batch)
 
         assert len(batches) == num_batches

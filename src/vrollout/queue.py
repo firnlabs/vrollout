@@ -7,21 +7,19 @@ import time
 from typing import Any
 
 
-class AsyncRewardQueue:
-    """Asynchronous queue connecting rollout workers to reward scorers."""
+class AsyncQueue:
+    """Asynchronous queue with backpressure handling."""
 
     def __init__(self, maxsize: int = 1000):
         self._maxsize = maxsize
         self._queue = asyncio.Queue(maxsize=self._maxsize)
 
-    async def put_rollouts(self, rollouts: Sequence[Any]) -> None:
+    async def put_items(self, items: Sequence[Any]) -> None:
         """Enqueues a batch of completed rollouts."""
-        for rollout in rollouts:
-            await self._queue.put(rollout)
+        for item in items:
+            await self._queue.put(item)
 
-    async def get_batch_for_scoring(
-        self, batch_size: int = 32, timeout: float = 0.1
-    ) -> list[Any]:
+    async def get_batch(self, batch_size: int = 32, timeout: float = 0.1) -> list[Any]:
         batch = []
         deadline = time.time() + timeout
 
