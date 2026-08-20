@@ -36,3 +36,12 @@ class AsyncQueue:
     def qsize(self) -> int:
         """Returns the number of items in the queue."""
         return self._queue.qsize()
+
+    def task_done(self, n: int = 1) -> None:
+        """Marks a set of items retrieved from the queue as 'done'."""
+        for _ in range(n):
+            self._queue.task_done()
+
+    async def join(self) -> None:
+        """Block and wait until all unfinished tasks (items) are done."""
+        await self._queue.join()
