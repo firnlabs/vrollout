@@ -77,3 +77,9 @@ class TestAsyncQueue:
         assert batch == [1, 2]
         assert elapsed >= timeout_sec
         assert "Timeout reached" in caplog.text
+
+    def test_qsize(self, queue_: queue.AsyncQueue):
+        queue_._queue.put_nowait(0)
+        queue_._queue.put_nowait(1)
+
+        assert queue_.qsize() == 2

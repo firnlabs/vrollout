@@ -21,6 +21,7 @@ class AsyncQueue:
     async def get_batch(
         self, batch_size: int = 32, timeout_sec: float = 0.1
     ) -> list[Any]:
+        """Returns a batch of items from the queue."""
         batches = []
         try:
             async with asyncio.timeout(timeout_sec):
@@ -33,10 +34,5 @@ class AsyncQueue:
         return batches
 
     def qsize(self) -> int:
-        raise NotImplementedError
-
-    def task_done(self, n: int = 1) -> None:
-        raise NotImplementedError
-
-    async def join(self) -> None:
-        raise NotImplementedError
+        """Returns the number of items in the queue."""
+        return self._queue.qsize()
