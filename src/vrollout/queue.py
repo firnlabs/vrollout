@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import Sequence
 import logging
-import time
 from typing import Any
 
 
@@ -19,34 +18,19 @@ class AsyncQueue:
         for item in items:
             await self._queue.put(item)
 
-    async def get_batch(self, batch_size: int = 32, timeout: float = 0.1) -> list[Any]:
-        batch = []
-        deadline = time.monotonic() + timeout
+    async def get_batch(
+        self, batch_size: int = 32, timeout_sec: float = 0.1
+    ) -> list[Any]:
+        batches = []
+        try:
+            async with asyncio.timeout(timeout_sec):
+                while len(batches) < batch_size:
+                    item = await self._queue.get()
+                    batches.append(item)
+        except asyncio.TimeoutError:
+            logging.debug("Timeout reached")
 
-        while len(batch) < batch_size:
-            # Try to get any items in the queue immediately
-            try:
-                item = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                logging.debug("Queue is empty.")
-            else:
-                batch.append(item)
-                continue
-
-            # Guard in case elapsed time has already exceeded deadline
-            time_left = deadline - time.monotonic()
-            if time_left <= 0:
-                break
-
-            try:
-                item = await asyncio.wait_for(self._queue.get(), timeout=time_left)
-            except asyncio.TimeoutError:
-                logging.debug("Timeout reached.")
-                break
-            else:
-                batch.append(item)
-
-        return batch
+        return batches
 
     def qsize(self) -> int:
         raise NotImplementedError
