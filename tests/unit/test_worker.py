@@ -20,7 +20,9 @@ def ray_session():
 
 @pytest.fixture
 def worker_() -> ActorProxy[worker.RolloutWorker]:
-    actor: ActorProxy[worker.RolloutWorker] = worker.ActorRolloutWorker.remote()
+    actor: ActorProxy[worker.RolloutWorker] = worker.ActorRolloutWorker.remote(
+        1, config=worker.RolloutConfig()
+    )
     return actor
 
 
