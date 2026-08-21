@@ -31,9 +31,11 @@ class TestRolloutWorker:
     """Tests for RolloutWorker class."""
 
     @pytest.mark.asyncio
-    async def test_generate_batch(self, worker_: ActorProxy[worker.RolloutWorker]):
+    async def test_generate_batch(
+        self, worker_: ActorProxy[worker.RolloutWorker], sampling_params
+    ):
         prompts = ["Prompt 1", "Prompt 2"]
 
-        results = await worker_.generate_batch.remote(prompts)
+        results = await worker_.generate_batch.remote(prompts, sampling_params)
 
         assert len(results) == len(prompts)

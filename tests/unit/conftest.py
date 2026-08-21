@@ -76,3 +76,8 @@ class MockAsyncLLMEngine:
 @pytest.fixture
 def mock_llm_engine() -> MockAsyncLLMEngine:
     return MockAsyncLLMEngine()
+
+
+@pytest.fixture
+def sampling_params() -> MockSamplingParams:
+    return MockSamplingParams()
