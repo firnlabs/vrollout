@@ -39,3 +39,7 @@ class TestRolloutWorker:
         results = await worker_.generate_batch.remote(prompts, sampling_params)
 
         assert len(results) == len(prompts)
+        for i, (r, p) in enumerate(zip(results, prompts, strict=True)):
+            assert r.prompt == p
+            assert r.request_id == f"request_{i}"
+            assert r.finish_reason == "stop"
