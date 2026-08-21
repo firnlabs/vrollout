@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+import itertools
 from typing import AsyncGenerator
 from typing import Protocol
 from typing import runtime_checkable
@@ -66,7 +67,6 @@ class RolloutConfig:
     gpus_per_worker: float = 0.0  # default 0.0 for local testing
     max_batch_size: int = 64
     max_seq_len: int = 512
-    temperature: float = 1.0
     gpu_memory_utilization: float = 0.60
 
 
@@ -156,3 +156,30 @@ class RolloutWorker:
 
 # use ray.remote function style to aid type checking
 ActorRolloutWorker: ActorClass[RolloutWorker] = ray.remote(RolloutWorker)
+
+
+class RolloutManager:
+    def __init__(self, config: RolloutConfig, llm_engine: AsyncLLMEngine) -> None:
+        self._config = config
+        self._workers = [
+            ActorRolloutWorker.remote(i, config, llm_engine)
+            for i in range(config.num_workers)
+        ]
+        self._worker_cycler = itertools.cycle(self._workers)
+
+    async def generate(
+        self,
+        prompts: Sequence[str],
+        sampling_params: SamplingParams,
+        chunk_size: int = 8,
+    ) -> list[RolloutTrajectory]:
+        tasks = []
+        for chunk in itertools.batched(prompts, chunk_size):
+            worker = next(self._worker_cycler)
+            task = worker.generate_batch.remote(chunk, sampling_params)  # ty: ignore[unresolved-attribute]
+            tasks.append(task)
+
+        results = await asyncio.gather(*tasks)
+        # flatten results
+        results = [r for chunk in results for r in chunk]
+        return results
