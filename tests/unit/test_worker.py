@@ -19,11 +19,12 @@ def ray_session():
 
 
 @pytest.fixture
-def worker_() -> ActorProxy[worker.RolloutWorker]:
-    actor: ActorProxy[worker.RolloutWorker] = worker.ActorRolloutWorker.remote(
-        1, config=worker.RolloutConfig()
+def worker_(mock_llm_engine) -> ActorProxy[worker.RolloutWorker]:
+    return worker.ActorRolloutWorker.remote(
+        worker_id=1,
+        config=worker.RolloutConfig(),
+        llm_engine=mock_llm_engine,
     )
-    return actor
 
 
 class TestRolloutWorker:
