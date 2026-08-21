@@ -13,7 +13,15 @@ from ray.actor import ActorClass
 
 
 class SamplingParams(Protocol):
-    pass
+    """LLM sampling parameters for generation.
+
+    Reference:
+    - https://docs.vllm.ai/en/v0.6.0/dev/sampling_params.html
+    """
+
+    temperature: float
+    max_tokens: int
+    logprobs: int | None
 
 
 @runtime_checkable
@@ -71,10 +79,12 @@ class RolloutTrajectory:
     logprobs: Sequence[float]
     finish_reason: str
     text: str
+    worker_id: int
 
 
 def _parse_vllm_output_to_rollout(
     request_output: RequestOutput,
+    worker_id: int,
 ) -> RolloutTrajectory:
     """Extracts RL training tensors and metadata from a finished vLLM RequestOutput."""
     r = request_output
@@ -98,6 +108,7 @@ def _parse_vllm_output_to_rollout(
         logprobs=logprobs,
         finish_reason=c.finish_reason or "stop",
         text=c.text,
+        worker_id=worker_id,
     )
 
 
@@ -131,7 +142,7 @@ class RolloutWorker:
         async for output in generator:
             final_output = output
 
-        return _parse_vllm_output_to_rollout(final_output)
+        return _parse_vllm_output_to_rollout(final_output, self._worker_id)
 
     @ray.method
     async def generate_batch(

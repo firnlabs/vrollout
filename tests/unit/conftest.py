@@ -8,6 +8,8 @@ from typing import Optional
 
 import pytest
 
+from vrollout.worker import SamplingParams
+
 
 @dataclass(frozen=True)
 class CompletionOutput:
@@ -28,13 +30,6 @@ class RequestOutput:
     finished: bool
 
 
-@dataclass
-class MockSamplingParams:
-    temperature: float = 0.7
-    max_tokens: int = 32
-    logprobs: Optional[int] = 1
-
-
 class MockAsyncLLMEngine:
     """Drop-in mock for vllm.AsyncLLMEngine for local testing."""
 
@@ -42,7 +37,7 @@ class MockAsyncLLMEngine:
         self.model_name = model_name
 
     async def generate(
-        self, prompt: str, sampling_params: MockSamplingParams, request_id: str
+        self, prompt: str, sampling_params: SamplingParams, request_id: str
     ) -> AsyncIterator[RequestOutput]:
         prompt_tokens = [hash(w) % 5000 + 1 for w in prompt.split()]
         num_gen = min(sampling_params.max_tokens, 8)
@@ -76,8 +71,3 @@ class MockAsyncLLMEngine:
 @pytest.fixture
 def mock_llm_engine() -> MockAsyncLLMEngine:
     return MockAsyncLLMEngine()
-
-
-@pytest.fixture
-def sampling_params() -> MockSamplingParams:
-    return MockSamplingParams()

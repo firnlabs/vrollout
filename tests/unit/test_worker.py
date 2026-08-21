@@ -1,5 +1,7 @@
 """Tests for worker.py."""
 
+from dataclasses import dataclass
+
 import pytest
 import ray
 from ray.actor import ActorProxy
@@ -18,10 +20,27 @@ def ray_session():
     ray.shutdown()
 
 
+@dataclass
+class SamplingParams:
+    temperature: float = 0.7
+    max_tokens: int = 32
+    logprobs: int = 1
+
+
 @pytest.fixture
-def worker_(mock_llm_engine) -> ActorProxy[worker.RolloutWorker]:
+def sampling_params() -> SamplingParams:
+    return SamplingParams()
+
+
+@pytest.fixture
+def worker_id() -> int:
+    return 1
+
+
+@pytest.fixture
+def worker_(worker_id: int, mock_llm_engine) -> ActorProxy[worker.RolloutWorker]:
     return worker.ActorRolloutWorker.remote(
-        worker_id=1,
+        worker_id=worker_id,
         config=worker.RolloutConfig(),
         llm_engine=mock_llm_engine,
     )
@@ -32,7 +51,10 @@ class TestRolloutWorker:
 
     @pytest.mark.asyncio
     async def test_generate_batch(
-        self, worker_: ActorProxy[worker.RolloutWorker], sampling_params
+        self,
+        worker_: ActorProxy[worker.RolloutWorker],
+        worker_id: int,
+        sampling_params: SamplingParams,
     ):
         prompts = ["Prompt 1", "Prompt 2"]
 
@@ -43,3 +65,4 @@ class TestRolloutWorker:
             assert r.prompt == p
             assert r.request_id == f"request_{i}"
             assert r.finish_reason == "stop"
+            assert r.worker_id == worker_id
