@@ -144,7 +144,6 @@ class RolloutWorker:
 
         return _parse_vllm_output_to_rollout(final_output, self._worker_id)
 
-    @ray.method
     async def generate_batch(
         self, prompts: Sequence[str], sampling_params: SamplingParams
     ) -> list[RolloutTrajectory]:

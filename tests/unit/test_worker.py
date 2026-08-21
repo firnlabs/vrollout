@@ -38,10 +38,28 @@ def worker_id() -> int:
 
 
 @pytest.fixture
-def worker_(worker_id: int, mock_llm_engine) -> ActorProxy[worker.RolloutWorker]:
+def rollout_config() -> worker.RolloutConfig:
+    return worker.RolloutConfig()
+
+
+@pytest.fixture
+def worker_(
+    worker_id: int, rollout_config: worker.RolloutConfig, mock_llm_engine
+) -> worker.RolloutWorker:
+    return worker.RolloutWorker(
+        worker_id=worker_id,
+        config=rollout_config,
+        llm_engine=mock_llm_engine,
+    )
+
+
+@pytest.fixture
+def actor_worker(
+    worker_id: int, rollout_config: worker.RolloutConfig, mock_llm_engine
+) -> ActorProxy[worker.RolloutWorker]:
     return worker.ActorRolloutWorker.remote(
         worker_id=worker_id,
-        config=worker.RolloutConfig(),
+        config=rollout_config,
         llm_engine=mock_llm_engine,
     )
 
@@ -52,13 +70,13 @@ class TestRolloutWorker:
     @pytest.mark.asyncio
     async def test_generate_batch(
         self,
-        worker_: ActorProxy[worker.RolloutWorker],
+        worker_: worker.RolloutWorker,
         worker_id: int,
         sampling_params: SamplingParams,
     ):
         prompts = ["Prompt 1", "Prompt 2"]
 
-        results = await worker_.generate_batch.remote(prompts, sampling_params)
+        results = await worker_.generate_batch(prompts, sampling_params)
 
         assert len(results) == len(prompts)
         for i, (r, p) in enumerate(zip(results, prompts, strict=True)):
@@ -66,3 +84,14 @@ class TestRolloutWorker:
             assert r.request_id == f"request_{i}"
             assert r.finish_reason == "stop"
             assert r.worker_id == worker_id
+
+    @pytest.mark.asyncio
+    async def test_actor_rollout_worker_remote(
+        self,
+        actor_worker: ActorProxy[worker.RolloutWorker],
+        sampling_params: SamplingParams,
+    ):
+        prompts = ["Remote prompt"]
+        results = await actor_worker.generate_batch.remote(prompts, sampling_params)  # ty: ignore[unresolved-attribute]
+        assert len(results) == 1
+        assert results[0].prompt == "Remote prompt"
