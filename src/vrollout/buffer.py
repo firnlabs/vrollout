@@ -33,10 +33,22 @@ def collate_rollouts_for_gae(
     pad_token_id: int = 0,
     device: str | torch.device = "cpu",
 ) -> RolloutBatch:
+    if not scored_rollouts:
+        raise ValueError("`scored_rollouts` is empty")
+
     batch_size = len(scored_rollouts)
+
+    if values is not None and len(values) < batch_size:
+        raise ValueError(
+            "Number of `values` must be at least the number of `scored_rollouts`"
+        )
+    if next_values is not None and len(next_values) < batch_size:
+        raise ValueError(
+            "Number of `next_values` must be at least the number of `scored_rollouts`"
+        )
+
     seq_lens = _get_sequence_lengths(scored_rollouts)
     max_seq_len = max(max(seq_lens), 1)  # max_seq_len >= 1
-    assert len(values) == batch_size, "number of values must match number of rollouts"
 
     completion_token_ids = torch.full(
         (batch_size, max_seq_len), pad_token_id, dtype=torch.int64, device=device
@@ -46,12 +58,13 @@ def collate_rollouts_for_gae(
     next_values_t = torch.zeros((batch_size,), dtype=torch.float32, device=device)
     dones = torch.ones_like(rewards)
     attention_mask = torch.zeros_like(rewards)
-    seq_lens_t = torch.tensor(seq_lens, dtype=torch.int64, device=device).reshape(-1)
+    seq_lens_t = torch.tensor(seq_lens, dtype=torch.int64, device=device)
 
     for i in range(batch_size):
         seq_len = seq_lens[i]
-        if next_values is not None and i < len(next_values):
+        if next_values is not None:
             next_values_t[i] = float(next_values[i])
+
         if seq_len <= 0:
             continue
 
@@ -67,7 +80,7 @@ def collate_rollouts_for_gae(
 
         rewards[i, seq_len - 1] = float(scored_rollouts[i].reward)
 
-        if values is not None and i < len(values):
+        if values is not None:
             value_slice = values[i][:seq_len]
             values_t[i, : len(value_slice)] = torch.tensor(
                 value_slice, dtype=torch.float32, device=device
