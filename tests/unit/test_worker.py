@@ -1,13 +1,12 @@
 """Tests for worker.py."""
 
-from dataclasses import dataclass
 import itertools
 
 import pytest
 import ray
 from ray.actor import ActorProxy
 
-from tests.unit.conftest import MockAsyncLLMEngine
+from tests.conftest import MockAsyncLLMEngine
 from vrollout import worker
 
 
@@ -20,18 +19,6 @@ def ray_session():
     )
     yield
     ray.shutdown()
-
-
-@dataclass
-class SamplingParams:
-    temperature: float = 0.7
-    max_tokens: int = 32
-    logprobs: int = 1
-
-
-@pytest.fixture
-def sampling_params() -> SamplingParams:
-    return SamplingParams()
 
 
 @pytest.fixture
@@ -83,7 +70,7 @@ class TestRolloutWorker:
         self,
         worker_: worker.RolloutWorker,
         worker_id: int,
-        sampling_params: SamplingParams,
+        sampling_params: worker.SamplingParams,
     ):
         prompts = ["Prompt 1", "Prompt 2"]
 
@@ -100,7 +87,7 @@ class TestRolloutWorker:
     async def test_actor_rollout_worker_remote(
         self,
         actor_worker: ActorProxy[worker.RolloutWorker],
-        sampling_params: SamplingParams,
+        sampling_params: worker.SamplingParams,
     ):
         prompts = ["Remote prompt"]
         results = await actor_worker.generate_batch.remote(prompts, sampling_params)  # ty: ignore[unresolved-attribute]
@@ -123,7 +110,7 @@ class TestRolloutManager:
     async def test_generate(
         self,
         manager: worker.RolloutManager,
-        sampling_params: SamplingParams,
+        sampling_params: worker.SamplingParams,
         num_workers: int,
     ):
         num_prompts = 12
