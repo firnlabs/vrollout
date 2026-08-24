@@ -93,3 +93,49 @@ def test_collate_rollouts_for_gae(
     )
     torch.testing.assert_close(result.values[0], torch.tensor(values[0] + [0, 0]))
     assert result.next_values[0].item() == pytest.approx(0.2)
+
+
+def test_collate_empty_rollouts_raises_error():
+    with pytest.raises(ValueError, match="`scored_rollouts` is empty"):
+        buffer.collate_rollouts_for_gae([])
+
+
+def test_collate_insufficient_values_raises_error(scored_rollouts):
+    with pytest.raises(ValueError, match="Number of `values`"):
+        buffer.collate_rollouts_for_gae(scored_rollouts, values=[[1.0]])
+
+
+def test_collate_insufficient_next_values_raises_error(scored_rollouts):
+    with pytest.raises(ValueError, match="Number of `next_values`"):
+        buffer.collate_rollouts_for_gae(scored_rollouts, next_values=[0.5])
+
+
+def test_collate_defaults_none_values(scored_rollouts, batch_size, max_seq_len):
+    result = buffer.collate_rollouts_for_gae(scored_rollouts)
+
+    torch.testing.assert_close(
+        result.values, torch.zeros((batch_size, max_seq_len), dtype=torch.float32)
+    )
+    torch.testing.assert_close(
+        result.next_values, torch.zeros((batch_size,), dtype=torch.float32)
+    )
+
+
+def test_collate_single_token_and_empty_token_rollouts():
+    rollouts = [
+        _create_scored_rollout([42], reward=1.0),  # seq_len == 1
+        _create_scored_rollout([], reward=0.0),  # seq_len == 0
+    ]
+    result = buffer.collate_rollouts_for_gae(rollouts)
+
+    assert result.completion_token_ids.shape == (2, 1)
+    # Row 0: single token
+    assert result.completion_token_ids[0, 0].item() == 42
+    assert result.dones[0, 0].item() == 1.0
+    assert result.attention_mask[0, 0].item() == 1.0
+    assert result.rewards[0, 0].item() == 1.0
+
+    # Row 1: empty token rollout
+    assert result.dones[1, 0].item() == 1.0
+    assert result.attention_mask[1, 0].item() == 0.0
+    assert result.rewards[1, 0].item() == 0.0
