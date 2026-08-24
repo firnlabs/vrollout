@@ -8,6 +8,7 @@ from typing import Optional
 
 import pytest
 
+from vrollout import worker
 from vrollout.worker import SamplingParams
 
 
@@ -71,3 +72,23 @@ class MockAsyncLLMEngine:
 @pytest.fixture
 def mock_llm_engine() -> MockAsyncLLMEngine:
     return MockAsyncLLMEngine()
+
+
+@pytest.fixture
+def mock_verifier():
+    async def verify(rollout: worker.RolloutTrajectory) -> float:
+        return float(rollout.worker_id % 2)
+
+    return verify
+
+
+@dataclass
+class SamplingParams_:
+    temperature: float = 0.7
+    max_tokens: int = 32
+    logprobs: int = 1
+
+
+@pytest.fixture
+def sampling_params() -> SamplingParams_:
+    return SamplingParams_()

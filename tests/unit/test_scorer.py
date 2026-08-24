@@ -14,14 +14,6 @@ def queue() -> async_queue.AsyncQueue:
     return async_queue.AsyncQueue()
 
 
-@pytest.fixture
-def mock_verifier():
-    async def verify(rollout: worker.RolloutTrajectory) -> float:
-        return float(rollout.worker_id % 2)
-
-    return verify
-
-
 @pytest.mark.asyncio
 async def test_score_rollouts(queue: async_queue.AsyncQueue, mock_verifier):
     stop_event = asyncio.Event()
