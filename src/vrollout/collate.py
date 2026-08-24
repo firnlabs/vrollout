@@ -1,4 +1,4 @@
-"""Rollout processing buffer for GAE computation."""
+"""Collate rollouts for GAE computation."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass

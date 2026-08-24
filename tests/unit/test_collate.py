@@ -1,9 +1,9 @@
-"""Tests for buffer.py."""
+"""Tests for collate.py."""
 
 import pytest
 import torch
 
-from vrollout import buffer
+from vrollout import collate
 from vrollout import scorer
 from vrollout import worker
 
@@ -59,9 +59,9 @@ def next_values(batch_size) -> list[float]:
 def test_collate_rollouts_for_gae(
     batch_size, max_seq_len, scored_rollouts, values, next_values
 ):
-    result = buffer.collate_rollouts_for_gae(scored_rollouts, values, next_values)
+    result = collate.collate_rollouts_for_gae(scored_rollouts, values, next_values)
 
-    assert isinstance(result, buffer.RolloutBatch)
+    assert isinstance(result, collate.RolloutBatch)
 
     # check shapes
     assert result.completion_token_ids.shape == (batch_size, max_seq_len)
@@ -97,21 +97,21 @@ def test_collate_rollouts_for_gae(
 
 def test_collate_empty_rollouts_raises_error():
     with pytest.raises(ValueError, match="`scored_rollouts` is empty"):
-        buffer.collate_rollouts_for_gae([])
+        collate.collate_rollouts_for_gae([])
 
 
 def test_collate_insufficient_values_raises_error(scored_rollouts):
     with pytest.raises(ValueError, match="Number of `values`"):
-        buffer.collate_rollouts_for_gae(scored_rollouts, values=[[1.0]])
+        collate.collate_rollouts_for_gae(scored_rollouts, values=[[1.0]])
 
 
 def test_collate_insufficient_next_values_raises_error(scored_rollouts):
     with pytest.raises(ValueError, match="Number of `next_values`"):
-        buffer.collate_rollouts_for_gae(scored_rollouts, next_values=[0.5])
+        collate.collate_rollouts_for_gae(scored_rollouts, next_values=[0.5])
 
 
 def test_collate_defaults_none_values(scored_rollouts, batch_size, max_seq_len):
-    result = buffer.collate_rollouts_for_gae(scored_rollouts)
+    result = collate.collate_rollouts_for_gae(scored_rollouts)
 
     torch.testing.assert_close(
         result.values, torch.zeros((batch_size, max_seq_len), dtype=torch.float32)
@@ -126,7 +126,7 @@ def test_collate_single_token_and_empty_token_rollouts():
         _create_scored_rollout([42], reward=1.0),  # seq_len == 1
         _create_scored_rollout([], reward=0.0),  # seq_len == 0
     ]
-    result = buffer.collate_rollouts_for_gae(rollouts)
+    result = collate.collate_rollouts_for_gae(rollouts)
 
     assert result.completion_token_ids.shape == (2, 1)
     # Row 0: single token
