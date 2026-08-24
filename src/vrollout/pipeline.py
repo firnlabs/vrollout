@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+import itertools
 import logging
 from typing import Any
 
@@ -43,6 +44,7 @@ class RolloutPipeline:
         """Generates rollouts and scores them concurrently in a background task."""
         queue = async_queue.AsyncQueue(self._config.queue_maxsize)
         stop_event = asyncio.Event()
+
         scorer_task = asyncio.create_task(
             scorer.score_rollouts(
                 queue,
@@ -51,14 +53,12 @@ class RolloutPipeline:
                 batch_size=self._config.scoring_batch_size,
             )
         )
-        # FIXME: Should the manager inputs be batched first?
-        rollouts = await self._manager.generate(
-            prompts, sampling_params, self._config.chunk_size
-        )
 
-        await queue.put_items(rollouts)
+        for chunk in itertools.batched(prompts, self._config.chunk_size):
+            rollout_chunk = await self._manager.generate(chunk, sampling_params)
+            await queue.put_items(rollout_chunk)
+
         await queue.join()
         stop_event.set()
-        results = await scorer_task
 
-        return results
+        return await scorer_task
