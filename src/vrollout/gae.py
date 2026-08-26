@@ -4,15 +4,16 @@ import torch
 from torch import Tensor
 
 try:
-    import triton
-    import triton.language as tl
+    # TODO: remove linter ignores after implementing compute_gae_triton
+    import triton  # noqa: F401
+    import triton.language as tl  # noqa: F401
 except ImportError:
     TRITON_AVAILABLE = False
 else:
     TRITON_AVAILABLE = True
 
 
-def compute_gae(
+def compute_gae_torch(
     rewards: Tensor,  # (B, T)
     values: Tensor,  # (B, T)
     next_values: Tensor,  # (B, )
@@ -21,7 +22,7 @@ def compute_gae(
     gamma: float = 0.99,
     lam: float = 0.95,
 ) -> tuple[Tensor, Tensor]:  # (B, T),  (B, T)
-    """Computes generalized advantage estimation (GAE)."""
+    """Computes generalized advantage estimation (GAE) using PyTorch primitives."""
     max_seq_len = rewards.shape[-1]
     if max_seq_len == 0:
         raise ValueError("Maximum sequence length is zero.")
@@ -56,3 +57,34 @@ def compute_gae(
     mask = torch.arange(max_seq_len, device=rewards.device) < seq_lens.unsqueeze(1)
     target_values = (advantages + values) * mask
     return advantages, target_values
+
+
+def compute_gae_triton(
+    rewards: Tensor,  # (B, T)
+    values: Tensor,  # (B, T)
+    next_values: Tensor,  # (B, )
+    dones: Tensor,  # (B, T)
+    seq_lens: Tensor,  # (B, )
+    gamma: float = 0.99,
+    lam: float = 0.95,
+) -> tuple[Tensor, Tensor]:  # (B, T),  (B, T)
+    """Computes generalized advantage estimation (GAE) using Triton fused kernel."""
+    raise NotImplementedError
+
+
+def compute_gae(
+    rewards: Tensor,  # (B, T)
+    values: Tensor,  # (B, T)
+    next_values: Tensor,  # (B, )
+    dones: Tensor,  # (B, T)
+    seq_lens: Tensor,  # (B, )
+    gamma: float = 0.99,
+    lam: float = 0.95,
+) -> tuple[Tensor, Tensor]:  # (B, T),  (B, T)
+    """Computes generalized advantage estimation (GAE)."""
+    if TRITON_AVAILABLE:
+        return compute_gae_triton(
+            rewards, values, next_values, dones, seq_lens, gamma, lam
+        )
+
+    return compute_gae_torch(rewards, values, next_values, dones, seq_lens, gamma, lam)
