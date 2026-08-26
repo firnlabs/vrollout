@@ -3,6 +3,14 @@
 import torch
 from torch import Tensor
 
+try:
+    import triton
+    import triton.language as tl
+except ImportError:
+    TRITON_AVAILABLE = False
+else:
+    TRITON_AVAILABLE = True
+
 
 def compute_gae(
     rewards: Tensor,  # (B, T)

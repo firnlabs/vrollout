@@ -112,3 +112,24 @@ def test_compute_gae_with_variable_padding():
     assert torch.allclose(
         target_values[2, :1], advantages[2, :1] + values[2, :1], atol=1e-5
     )
+
+
+@pytest.mark.skipif(not gae.TRITON_AVAILABLE, reason="Requires OpenAI Triton")
+class TestTritonGAE:
+    def test_numerical_parity_with_pytorch_age(self):
+        torch.manual_seed(42)
+        B, T = 8, 64
+        rewards = torch.randn((B, T), device="cuda", dtype=torch.float32)
+        values = torch.randn((B, T), device="cuda", dtype=torch.float32)
+        next_values = torch.randn((B,), device="cuda", dtype=torch.float32)
+        dones = (torch.rand((B, T), device="cuda") > 0.9).float()
+
+        adv_torch, ret_torch = gae.compute_gae_torch(
+            rewards, values, next_values, dones
+        )
+        adv_triton, ret_triton = gae.compute_gae_triton(
+            rewards, values, next_values, dones
+        )
+
+        torch.testing.allclose(adv_triton, adv_torch, atol=1e-5, rtol=1e-5)
+        torch.testing.allclose(ret_triton, ret_torch, atol=1e-5, rtol=1e-5)
