@@ -114,7 +114,10 @@ class TestComputeGAETorch:
         )
 
 
-@pytest.mark.skipif(not gae.TRITON_AVAILABLE, reason="Requires OpenAI Triton")
+@pytest.mark.skipif(
+    not (gae.TRITON_AVAILABLE and torch.cuda.is_available()),
+    reason="Requires OpenAI Triton and CUDA-enabled GPU",
+)
 class TestComputeGAETriton:
     """Tests for compute_gae_triton function."""
 
@@ -176,6 +179,7 @@ class TestComputeGAE:
 
     def test_compute_gae_triton_path(self, mocker):
         mocker.patch.object(gae, "TRITON_AVAILABLE", True)
+        mocker.patch.object(torch.cuda, "is_available", return_value=True)
         mock_triton = mocker.patch.object(
             gae,
             "compute_gae_triton",

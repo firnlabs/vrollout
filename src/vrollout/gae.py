@@ -72,7 +72,7 @@ if TRITON_AVAILABLE:
         stride_b,
         gamma: tl.constexpr,
         lam: tl.constexpr,
-    ):
+    ):  # pragma: no cover
         """Fused Triton GAE Kernel.
 
         Program instance per batch row, backward pass in registers.
@@ -126,7 +126,7 @@ if TRITON_AVAILABLE:
         seq_lens: Tensor,  # (B, )
         gamma: float = 0.99,
         lam: float = 0.95,
-    ) -> tuple[Tensor, Tensor]:  # (B, T),  (B, T)
+    ) -> tuple[Tensor, Tensor]:  # pragma: no cover
         """Computes generalized advantage estimation (GAE) using Triton fused kernel."""
         B, T = rewards.shape
         if values.shape != (B, T):
@@ -166,6 +166,19 @@ if TRITON_AVAILABLE:
         )
 
         return advantages, target_values
+else:
+
+    def compute_gae_triton(
+        rewards: Tensor,  # (B, T)
+        values: Tensor,  # (B, T)
+        next_values: Tensor,  # (B, )
+        dones: Tensor,  # (B, T)
+        seq_lens: Tensor,  # (B, )
+        gamma: float = 0.99,
+        lam: float = 0.95,
+    ) -> tuple[Tensor, Tensor]:  # pragma: no cover
+        """Computes generalized advantage estimation (GAE) using Triton fused kernel."""
+        raise RuntimeError("Triton is not available in the current environment.")
 
 
 def compute_gae(
@@ -178,7 +191,7 @@ def compute_gae(
     lam: float = 0.95,
 ) -> tuple[Tensor, Tensor]:  # (B, T),  (B, T)
     """Computes generalized advantage estimation (GAE)."""
-    if TRITON_AVAILABLE:
+    if TRITON_AVAILABLE and torch.cuda.is_available():
         return compute_gae_triton(
             rewards, values, next_values, dones, seq_lens, gamma, lam
         )
