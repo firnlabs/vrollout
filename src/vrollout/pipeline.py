@@ -7,7 +7,11 @@ import itertools
 import logging
 from typing import Any
 
+from torch import Tensor
+
 from vrollout import async_queue
+from vrollout import collate
+from vrollout import gae
 from vrollout import scorer
 from vrollout import worker
 
@@ -21,6 +25,8 @@ class PipelineConfig:
     chunk_size: int = 8
     scoring_batch_size: int = 16
     queue_maxsize: int = 1000
+    gae_gamma: float = 0.99
+    gae_lambda: float = 0.95
 
 
 class RolloutPipeline:
@@ -42,6 +48,7 @@ class RolloutPipeline:
         sampling_params: worker.SamplingParams | None = None,
     ) -> list[scorer.ScoredRollout]:
         """Generates rollouts and scores them concurrently in a background task."""
+        # TODO: check if the prompts list is empty; raise error if it is
         queue = async_queue.AsyncQueue(self._config.queue_maxsize)
         stop_event = asyncio.Event()
 
@@ -62,3 +69,27 @@ class RolloutPipeline:
         stop_event.set()
 
         return await scorer_task
+
+    async def generate_and_compute_gae(
+        self,
+        prompts: Sequence[str],
+        sampling_params: worker.SamplingParams | None = None,
+        # TODO: add values, next_values, device parameters for GAE computation
+    ) -> tuple[collate.RolloutBatch, Tensor, Tensor]:
+        """Generates batched rollouts, scores them and computes GAE for each batch."""
+        scored_rollouts = await self.generate_and_score(prompts, sampling_params)
+
+        # Collate tensors for GAE computation
+        rollout_batch = collate.collate_rollouts_for_gae(scored_rollouts)
+
+        advantages, target_values = gae.compute_gae(
+            rewards=rollout_batch.rewards,
+            values=rollout_batch.values,
+            next_values=rollout_batch.next_values,
+            dones=rollout_batch.dones,
+            seq_lens=rollout_batch.seq_lens,
+            gamma=self._config.gae_gamma,
+            lam=self._config.gae_lambda,
+        )
+
+        return rollout_batch, advantages, target_values
