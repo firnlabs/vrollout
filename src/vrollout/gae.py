@@ -68,7 +68,7 @@ if TRITON_AVAILABLE:
         dones_ptr,
         seq_lens_ptr,
         adv_ptr,
-        returns_ptr,
+        target_values_ptr,
         stride_b,
         gamma: tl.constexpr,
         lam: tl.constexpr,
@@ -113,7 +113,7 @@ if TRITON_AVAILABLE:
 
             #  store advantage and return to global memory output pointers
             tl.store(adv_ptr + offset_t, last_gae)
-            tl.store(returns_ptr + offset_t, target_value)
+            tl.store(target_values_ptr + offset_t, target_value)
 
             #  update bootstrap value with current step's value for previous time step
             next_value = value
@@ -144,8 +144,8 @@ if TRITON_AVAILABLE:
         seq_lens = seq_lens.contiguous().cuda()
 
         # pre-allocate empty output tensors for advantages and returns
-        advantages = torch.empty_like(rewards)
-        target_values = torch.empty_like(rewards)
+        advantages = torch.zeros_like(rewards)
+        target_values = torch.zeros_like(rewards)
 
         # calculate batch row stride and launch 1D Triton grid
         stride_b = rewards.stride(0)
@@ -157,6 +157,7 @@ if TRITON_AVAILABLE:
             values,
             next_values,
             dones,
+            seq_lens,
             advantages,
             target_values,
             stride_b,

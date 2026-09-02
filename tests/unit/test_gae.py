@@ -125,19 +125,23 @@ class TestComputeGAETriton:
         values = torch.randn((B, T), device="cuda", dtype=torch.float32)
         next_values = torch.randn((B,), device="cuda", dtype=torch.float32)
         dones = (torch.rand((B, T), device="cuda") > 0.9).float()
-        seq_lens = torch.randint(0, T, size=(B,), device="cuda", dtype=torch.float32)
+        seq_lens = torch.randint(0, T, size=(B,), device="cuda", dtype=torch.int32)
         gamma = 0.99
         lam = 0.95
 
-        adv_torch, ret_torch = gae.compute_gae_torch(
+        advantages_torch, target_values_torch = gae.compute_gae_torch(
             rewards, values, next_values, dones, seq_lens, gamma, lam
         )
-        adv_triton, ret_triton = gae.compute_gae_triton(
+        advantages_triton, target_values_triton = gae.compute_gae_triton(
             rewards, values, next_values, dones, seq_lens, gamma, lam
         )
 
-        torch.testing.assert_close(adv_triton, adv_torch, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(ret_triton, ret_torch, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(
+            advantages_triton, advantages_torch, atol=1e-5, rtol=1e-5
+        )
+        torch.testing.assert_close(
+            target_values_triton, target_values_torch, atol=1e-5, rtol=1e-5
+        )
 
 
 class TestComputeGAE:
