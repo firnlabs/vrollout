@@ -4,7 +4,9 @@ import collections
 import time
 
 import pytest
+import torch
 
+from vrollout import collate
 from vrollout import pipeline
 from vrollout import scorer
 from vrollout import worker
@@ -127,3 +129,20 @@ class TestRolloutPipeline:
             "Scoring did not overlap with generation — "
             "all items were scored at the same time"
         )
+
+    @pytest.mark.asyncio
+    async def test_generate_and_compute_gae(
+        self, pipeline_, num_prompts, prompts, sampling_params
+    ):
+        # Call pipeline.generate_and_compute_gae
+        batch, advantages, target_values = await pipeline_.generate_and_compute_gae(
+            prompts, sampling_params
+        )
+
+        # Check computations
+        assert isinstance(batch, collate.RolloutBatch)
+        assert batch.completion_token_ids.shape[0] == num_prompts
+        assert advantages.shape == batch.rewards.shape
+        assert target_values.shape == batch.rewards.shape
+        assert torch.isfinite(advantages).all()
+        assert torch.isfinite(target_values).all()
