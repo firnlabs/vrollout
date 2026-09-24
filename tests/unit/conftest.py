@@ -14,16 +14,16 @@ from torch.distributed import device_mesh
 from torch.distributed.device_mesh import DeviceMesh
 
 P = ParamSpec("P")
-WorldSize = int
-Rank = int
-MultiProcessFn = Callable[Concatenate[Rank, WorldSize, DeviceMesh, P], None]
+type WorldSize = int
+type Rank = int
+type MultiProcessFn[**P] = Callable[Concatenate[Rank, WorldSize, DeviceMesh, P], None]
 
 
 def _worker_wrapper(
     rank: Rank,
     world_size: WorldSize,
     init_method: str,
-    fn: MultiProcessFn,
+    fn: MultiProcessFn[Any],
     args: tuple[Any, ...],
 ) -> None:
     try:
@@ -48,9 +48,9 @@ def world_size() -> WorldSize:
 @pytest.fixture
 def run_multiprocess(
     world_size: WorldSize,
-) -> Callable[Concatenate[MultiProcessFn, P], None]:
+) -> Callable[Concatenate[MultiProcessFn[P], P], None]:
     def _run_multiprocess(
-        fn: MultiProcessFn,
+        fn: MultiProcessFn[P],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> None:
