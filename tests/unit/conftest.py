@@ -13,9 +13,10 @@ from torch import multiprocessing as mp
 from torch.distributed import device_mesh
 from torch.distributed.device_mesh import DeviceMesh
 
+from vrollout.types import Rank
+from vrollout.types import WorldSize
+
 P = ParamSpec("P")
-type WorldSize = int
-type Rank = int
 type MultiProcessFn[**P] = Callable[Concatenate[Rank, WorldSize, DeviceMesh, P], None]
 
 

@@ -6,9 +6,8 @@ import torch
 from torch import Tensor
 
 from vrollout.scorer import ScoredRollout
-
-type Rank = int
-type WorldSize = int
+from vrollout.types import Rank
+from vrollout.types import WorldSize
 
 
 # TODO: add jaxtyping tensor type, shape
