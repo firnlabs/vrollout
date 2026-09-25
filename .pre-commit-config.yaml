@@ -30,16 +30,16 @@ repos:
         types: [python]
         stages: [pre-commit]
         pass_filenames: false  # rescan global workspace path (.)
-      - id: ruff-format
-        name: Ruff code autoformat
-        entry: uv run ruff format .
+      - id: docformatter
+        name: Docformatter autoformat
+        entry: uv run docformatter --in-place -r src tests
         language: system
         types: [python]
         stages: [pre-commit]
         pass_filenames: false
-      - id: docformatter
-        name: Docformatter autoformat
-        entry: uv run docformatter --in-place -r src tests
+      - id: ruff-format
+        name: Ruff code autoformat
+        entry: uv run ruff format .
         language: system
         types: [python]
         stages: [pre-commit]

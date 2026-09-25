@@ -10,70 +10,16 @@ import torch
 from torch import nn
 from torch import optim
 from torch import Tensor
-from torch.distributed import fsdp
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 
+from tests.conftest import ToyModel
 from vrollout import trainer as tr
 from vrollout.buffer import DistributedBatch
 from vrollout.types import Rank
 from vrollout.types import WorldSize
 
 torch.manual_seed(42)
-
-
-class Block(nn.Module):
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.ln = nn.LayerNorm(d_model)
-        self.fc1 = nn.Linear(d_model, 4 * d_model)
-        self.act = nn.GELU()
-        self.fc2 = nn.Linear(4 * d_model, d_model)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return x + self.fc2(self.act(self.fc1(self.ln(x))))
-
-
-class ToyModel(nn.Module):
-    def __init__(self, *, d_model: int, num_layers: int, vocab_size: int = 64):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, d_model)
-        self.layers = nn.ModuleList([Block(d_model) for _ in range(num_layers)])
-        self.head = nn.Linear(d_model, vocab_size, bias=False)
-
-    def forward(
-        self, input_ids: Tensor, attention_mask: Tensor | None = None
-    ) -> Tensor:
-        _ = attention_mask  # unused: kept for API compatiblity
-        x = self.embedding(input_ids)
-        for layer in self.layers:
-            x = layer(x)
-        return self.head(x)
-
-
-@pytest.fixture
-def d_model() -> int:
-    return 16
-
-
-@pytest.fixture
-def num_layers() -> int:
-    return 2
-
-
-@pytest.fixture
-def vocab_size() -> int:
-    return 32
-
-
-@pytest.fixture
-def model_factory(
-    d_model: int, num_layers: int, vocab_size: int
-) -> Callable[[], ToyModel]:
-    def _model_factory():
-        return ToyModel(d_model=d_model, num_layers=num_layers, vocab_size=vocab_size)
-
-    return _model_factory
 
 
 @pytest.fixture
@@ -103,28 +49,6 @@ def create_batch(
         attention_mask=attention_mask,
         rewards=torch.randint(0, 2, (batch_size,)),
     )
-
-
-@pytest.fixture
-def actor_model(model_factory: Callable[[], ToyModel]) -> ToyModel:
-    return model_factory()
-
-
-@pytest.fixture
-def ref_model(model_factory: Callable[[], ToyModel]) -> ToyModel:
-    model = model_factory()
-    for p in model.parameters():
-        p.requires_grad = False
-    model.eval()
-    return model
-
-
-def _shard_model(model: nn.Module, mesh: DeviceMesh) -> nn.Module:
-    for m in model.modules():
-        if isinstance(m, Block):
-            fsdp.fully_shard(m, mesh=mesh)
-    fsdp.fully_shard(model, mesh=mesh)
-    return model
 
 
 def _to_full(t: Tensor) -> Tensor:
@@ -191,11 +115,12 @@ def _test_train_step_worker(
     create_batch: Callable[[], DistributedBatch],
     actor_model: ToyModel,
     ref_model: ToyModel,
+    shard_model: Callable[[nn.Module, DeviceMesh], nn.Module],
 ) -> None:
     _ = rank  # unused
     _ = world_size  # unused
-    sharded_actor = _shard_model(actor_model, mesh=mesh)
-    sharded_ref = _shard_model(ref_model, mesh=mesh)
+    sharded_actor = shard_model(actor_model, mesh)
+    sharded_ref = shard_model(ref_model, mesh)
     _test_train_step_helper(create_batch, sharded_actor, sharded_ref)
 
 
@@ -205,5 +130,9 @@ class TestFSDPTrainer:
     def test_train_step_local(self, create_batch, actor_model, ref_model):
         _test_train_step_helper(create_batch, actor_model, ref_model)
 
-    def test_train_step(self, create_batch, actor_model, ref_model, run_multiprocess):
-        run_multiprocess(_test_train_step_worker, create_batch, actor_model, ref_model)
+    def test_train_step(
+        self, create_batch, actor_model, ref_model, shard_model, run_multiprocess
+    ):
+        run_multiprocess(
+            _test_train_step_worker, create_batch, actor_model, ref_model, shard_model
+        )
