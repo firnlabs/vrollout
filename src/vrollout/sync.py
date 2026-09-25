@@ -7,6 +7,8 @@ from torch import nn
 from torch import Tensor
 from torch.distributed.tensor import DTensor
 
+from vrollout.types import Rank
+
 
 class WeightsReceiver(Protocol):
     def update_weights(self, weights: Mapping[str, Tensor]) -> None: ...
@@ -19,7 +21,7 @@ class WeightBroadcaster:
     """
 
     def __init__(
-        self, rank: int, receivers: list[WeightsReceiver] | None = None
+        self, rank: Rank, receivers: list[WeightsReceiver] | None = None
     ) -> None:
         self._rank = rank
         self._receivers = receivers or []
