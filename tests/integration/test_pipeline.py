@@ -12,39 +12,14 @@ from vrollout import scorer
 from vrollout import worker
 
 
-@pytest.fixture
-def rollout_config() -> worker.RolloutConfig:
-    return worker.RolloutConfig()
-
-
-@pytest.fixture
-def manager(rollout_config, mock_llm_engine) -> worker.RolloutManager:
-    return worker.RolloutManager(rollout_config, mock_llm_engine)
-
-
-@pytest.fixture
-def pipeline_(manager, mock_verifier) -> pipeline.RolloutPipeline:
-    return pipeline.RolloutPipeline(manager, mock_verifier)
-
-
-@pytest.fixture
-def num_prompts() -> int:
-    return 32
-
-
-@pytest.fixture
-def prompts(num_prompts) -> list[str]:
-    return [f"Prompt {i}" for i in range(num_prompts)]
-
-
 class TestRolloutPipeline:
     """Tests for RolloutPipeline class."""
 
     @pytest.mark.asyncio
     async def test_generate_and_score(
-        self, pipeline_, num_prompts, prompts, sampling_params, rollout_config
+        self, rollout_pipeline, num_prompts, prompts, sampling_params, rollout_config
     ):
-        results: list[scorer.ScoredRollout] = await pipeline_.generate_and_score(
+        results: list[scorer.ScoredRollout] = await rollout_pipeline.generate_and_score(
             prompts, sampling_params
         )
 
@@ -54,19 +29,25 @@ class TestRolloutPipeline:
         assert len(worker_ids) == rollout_config.num_workers
 
     @pytest.mark.asyncio
-    async def test_generate_and_score_empty_prompts(self, pipeline_):
-        results = await pipeline_.generate_and_score([])
+    async def test_generate_and_score_empty_prompts(self, rollout_pipeline):
+        results = await rollout_pipeline.generate_and_score([])
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_generate_and_score_single_prompt(self, pipeline_, sampling_params):
-        results = await pipeline_.generate_and_score(["one prompt"], sampling_params)
+    async def test_generate_and_score_single_prompt(
+        self, rollout_pipeline, sampling_params
+    ):
+        results = await rollout_pipeline.generate_and_score(
+            ["one prompt"], sampling_params
+        )
         assert len(results) == 1
         assert isinstance(results[0], scorer.ScoredRollout)
 
     @pytest.mark.asyncio
-    async def test_scored_rollout_content(self, pipeline_, prompts, sampling_params):
-        results = await pipeline_.generate_and_score(prompts, sampling_params)
+    async def test_scored_rollout_content(
+        self, rollout_pipeline, prompts, sampling_params
+    ):
+        results = await rollout_pipeline.generate_and_score(prompts, sampling_params)
 
         for r in results:
             assert isinstance(r, scorer.ScoredRollout)
@@ -79,11 +60,11 @@ class TestRolloutPipeline:
 
     @pytest.mark.asyncio
     async def test_generate_and_score_uneven_chunks(
-        self, manager, mock_verifier, sampling_params
+        self, rollout_manager, mock_verifier, sampling_params
     ):
         # chunk_size=5 with 12 prompts -> chunks of [5, 5, 2]
         config = pipeline.PipelineConfig(chunk_size=5, scoring_batch_size=3)
-        pipe = pipeline.RolloutPipeline(manager, mock_verifier, config)
+        pipe = pipeline.RolloutPipeline(rollout_manager, mock_verifier, config)
         prompts = [f"Prompt {i}" for i in range(12)]
 
         results = await pipe.generate_and_score(prompts, sampling_params)
@@ -92,10 +73,10 @@ class TestRolloutPipeline:
 
     @pytest.mark.asyncio
     async def test_generate_and_score_fewer_prompts_than_chunk_size(
-        self, manager, mock_verifier, sampling_params
+        self, rollout_manager, mock_verifier, sampling_params
     ):
         config = pipeline.PipelineConfig(chunk_size=16)
-        pipe = pipeline.RolloutPipeline(manager, mock_verifier, config)
+        pipe = pipeline.RolloutPipeline(rollout_manager, mock_verifier, config)
         prompts = [f"Prompt {i}" for i in range(3)]
 
         results = await pipe.generate_and_score(prompts, sampling_params)
@@ -103,7 +84,9 @@ class TestRolloutPipeline:
         assert len(results) == 3
 
     @pytest.mark.asyncio
-    async def test_scoring_overlaps_with_generation(self, manager, sampling_params):
+    async def test_scoring_overlaps_with_generation(
+        self, rollout_manager, sampling_params
+    ):
         """Verify the scorer starts processing before all chunks finish generating."""
         score_timestamps: list[float] = []
 
@@ -115,7 +98,7 @@ class TestRolloutPipeline:
             return 1.0
 
         config = pipeline.PipelineConfig(chunk_size=4, scoring_batch_size=4)
-        pipe = pipeline.RolloutPipeline(manager, timestamping_verifier, config)
+        pipe = pipeline.RolloutPipeline(rollout_manager, timestamping_verifier, config)
         prompts = [f"Prompt {i}" for i in range(16)]  # 4 chunks of 4
 
         await pipe.generate_and_score(prompts, sampling_params)
@@ -132,12 +115,14 @@ class TestRolloutPipeline:
 
     @pytest.mark.asyncio
     async def test_generate_and_compute_gae(
-        self, pipeline_, num_prompts, prompts, sampling_params
+        self, rollout_pipeline, num_prompts, prompts, sampling_params
     ):
         # Call pipeline.generate_and_compute_gae
-        batch, advantages, target_values = await pipeline_.generate_and_compute_gae(
-            prompts, sampling_params
-        )
+        (
+            batch,
+            advantages,
+            target_values,
+        ) = await rollout_pipeline.generate_and_compute_gae(prompts, sampling_params)
 
         # Check computations
         assert isinstance(batch, collate.RolloutBatch)
