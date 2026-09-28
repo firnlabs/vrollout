@@ -12,8 +12,9 @@ from torch import Tensor
 from vrollout import async_queue
 from vrollout import collate
 from vrollout import gae
+from vrollout import generation
 from vrollout import scorer
-from vrollout import worker
+from vrollout import types
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class RolloutPipeline:
 
     def __init__(
         self,
-        manager: worker.RolloutManager,
+        manager: generation.RolloutManager,
         verifier: Any,
         config: PipelineConfig | None = None,
     ) -> None:
@@ -45,7 +46,7 @@ class RolloutPipeline:
     async def generate_and_score(
         self,
         prompts: Sequence[str],
-        sampling_params: worker.SamplingParams | None = None,
+        sampling_params: types.SamplingParams | None = None,
     ) -> list[scorer.ScoredRollout]:
         """Generates rollouts and scores them concurrently in a background task."""
         # TODO: check if the prompts list is empty; raise error if it is
@@ -73,7 +74,7 @@ class RolloutPipeline:
     async def generate_and_compute_gae(
         self,
         prompts: Sequence[str],
-        sampling_params: worker.SamplingParams | None = None,
+        sampling_params: types.SamplingParams | None = None,
         # TODO: add values, next_values, device parameters for GAE computation
     ) -> tuple[collate.RolloutBatch, Tensor, Tensor]:
         """Generates batched rollouts, scores them and computes GAE for each batch."""

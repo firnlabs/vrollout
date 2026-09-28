@@ -5,13 +5,13 @@ import torch
 
 from vrollout import collate
 from vrollout import scorer
-from vrollout import worker
+from vrollout import types
 
 
 def _create_scored_rollout(
     completed_tokens: list[int], reward: float = 1.0
 ) -> scorer.ScoredRollout:
-    traj = worker.RolloutTrajectory(
+    traj = types.RolloutTrajectory(
         request_id="req_1",
         prompt="Prompt",
         prompt_token_ids=[1],

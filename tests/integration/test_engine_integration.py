@@ -13,8 +13,9 @@ from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh
 
 from vrollout import engine
+from vrollout import generation
 from vrollout import pipeline
-from vrollout import worker
+from vrollout import types
 from vrollout.types import Rank
 from vrollout.types import WorldSize
 
@@ -24,10 +25,10 @@ class LazyPipelineBuilder:
 
     def __init__(
         self,
-        rollout_config: worker.RolloutConfig,
+        rollout_config: types.RolloutConfig,
         pipeline_config: pipeline.PipelineConfig,
-        llm_engine: worker.AsyncLLMEngine,
-        verifier: Callable[[worker.RolloutTrajectory], Awaitable[float]],
+        llm_engine: types.AsyncLLMEngine,
+        verifier: Callable[[types.RolloutTrajectory], Awaitable[float]],
     ) -> None:
         self.rollout_config = rollout_config
         self.pipeline_config = pipeline_config
@@ -35,7 +36,7 @@ class LazyPipelineBuilder:
         self.verifier = verifier
 
     def __call__(self) -> pipeline.RolloutPipeline:
-        manager = worker.RolloutManager(self.rollout_config, self.llm_engine)
+        manager = generation.RolloutManager(self.rollout_config, self.llm_engine)
         return pipeline.RolloutPipeline(manager, self.verifier, self.pipeline_config)
 
 
@@ -72,7 +73,7 @@ async def _test_train_iteration_worker(
     mesh: DeviceMesh,
     pipeline_builder: Callable[[], pipeline.RolloutPipeline],
     prompts: list[str],
-    sampling_params: worker.SamplingParams,
+    sampling_params: types.SamplingParams,
     actor_model: nn.Module,
     ref_model: nn.Module,
     shard_model: Callable[[nn.Module, DeviceMesh], nn.Module],

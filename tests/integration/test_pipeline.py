@@ -9,7 +9,7 @@ import torch
 from vrollout import collate
 from vrollout import pipeline
 from vrollout import scorer
-from vrollout import worker
+from vrollout import types
 
 
 class TestRolloutPipeline:
@@ -51,7 +51,7 @@ class TestRolloutPipeline:
 
         for r in results:
             assert isinstance(r, scorer.ScoredRollout)
-            assert isinstance(r.trajectory, worker.RolloutTrajectory)
+            assert isinstance(r.trajectory, types.RolloutTrajectory)
             # mock_verifier returns float(worker_id % 2)
             assert r.reward == float(r.trajectory.worker_id % 2)
             assert r.trajectory.finish_reason == "stop"
@@ -91,7 +91,7 @@ class TestRolloutPipeline:
         score_timestamps: list[float] = []
 
         async def timestamping_verifier(
-            rollout: worker.RolloutTrajectory,
+            rollout: types.RolloutTrajectory,
         ) -> float:
             _ = rollout  # unused
             score_timestamps.append(time.monotonic())
