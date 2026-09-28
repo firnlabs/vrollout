@@ -1,85 +1,18 @@
-"""Rollout worker."""
+"""Distributed LLM rollout generation across Ray actors."""
 
 import asyncio
-from collections.abc import Mapping
 from collections.abc import Sequence
-from dataclasses import dataclass
 import itertools
-from typing import AsyncGenerator
-from typing import Protocol
-from typing import runtime_checkable
 
 import ray
 from ray.actor import ActorClass
 
-
-class SamplingParams(Protocol):
-    """LLM sampling parameters for generation.
-
-    Reference:
-    - https://docs.vllm.ai/en/v0.6.0/dev/sampling_params.html
-    """
-
-    temperature: float
-    max_tokens: int
-    logprobs: int | None
-
-
-@runtime_checkable
-class SampleLogprob(Protocol):
-    logprob: float
-    rank: int | None = None
-    decoded_token: str | None = None
-
-
-class CompletionOutput(Protocol):
-    index: int
-    text: str
-    token_ids: Sequence[int]
-    cumulative_logprob: float
-    logprobs: Sequence[Mapping[int, SampleLogprob | float]] | None = None
-    finish_reason: str | None = "stop"
-
-
-class RequestOutput(Protocol):
-    request_id: str
-    prompt: str
-    prompt_token_ids: Sequence[int]
-    outputs: Sequence[CompletionOutput]
-    finished: bool
-
-
-class AsyncLLMEngine(Protocol):
-    def generate(
-        self,
-        prompt: str,
-        sampling_params: SamplingParams,
-        request_id: str,
-        *args,
-        **kwargs,
-    ) -> AsyncGenerator[RequestOutput, None]: ...
-
-
-@dataclass
-class RolloutConfig:
-    model_name: str = "mock-model"
-    num_workers: int = 2
-    gpus_per_worker: float = 0.0  # default 0.0 for local testing
-    max_batch_size: int = 64
-    max_seq_len: int = 512
-    gpu_memory_utilization: float = 0.60
-
-
-@dataclass(frozen=True)
-class RolloutTrajectory:
-    request_id: str
-    prompt: str
-    prompt_token_ids: Sequence[int]
-    completion_token_ids: Sequence[int]
-    logprobs: Sequence[float]
-    finish_reason: str
-    text: str
-    worker_id: int
+from vrollout.types import AsyncLLMEngine
+from vrollout.types import RequestOutput
+from vrollout.types import RolloutConfig
+from vrollout.types import RolloutTrajectory
+from vrollout.types import SampleLogprob
+from vrollout.types import SamplingParams
 
 
 def _parse_vllm_output_to_rollout(
@@ -87,6 +20,10 @@ def _parse_vllm_output_to_rollout(
     worker_id: int,
 ) -> RolloutTrajectory:
     """Extracts RL training tensors and metadata from a finished vLLM RequestOutput."""
+    if not request_output.outputs:
+        raise ValueError(
+            f"RequestOutput contains no completion outputs: {request_output.request_id}"
+        )
     r = request_output
     c = r.outputs[0]
     logprobs = []
@@ -113,11 +50,12 @@ def _parse_vllm_output_to_rollout(
 
 
 def _create_default_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
+    """Creates a default vLLM AsyncLLMEngine instance from configuration."""
     raise NotImplementedError("To be implemented")
 
 
 class RolloutWorker:
-    """Worker for continuous rollout integration."""
+    """Worker for continuous rollout generation via LLM engine."""
 
     def __init__(
         self,
@@ -142,6 +80,9 @@ class RolloutWorker:
         async for output in generator:
             final_output = output
 
+        if final_output is None:
+            raise RuntimeError(f"Engine produced no output for request {request_id}")
+
         return _parse_vllm_output_to_rollout(final_output, self._worker_id)
 
     async def generate_batch(
@@ -159,6 +100,8 @@ ActorRolloutWorker: ActorClass[RolloutWorker] = ray.remote(RolloutWorker)
 
 
 class RolloutManager:
+    """Manages a pool of Ray RolloutWorker actors and distributes prompt batches."""
+
     def __init__(self, config: RolloutConfig, llm_engine: AsyncLLMEngine) -> None:
         self._config = config
         self._workers = [
@@ -173,6 +116,9 @@ class RolloutManager:
         sampling_params: SamplingParams,
         chunk_size: int = 8,
     ) -> list[RolloutTrajectory]:
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
         tasks = []
         for chunk in itertools.batched(prompts, chunk_size):
             worker = next(self._worker_cycler)

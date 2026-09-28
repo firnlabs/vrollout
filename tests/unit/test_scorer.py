@@ -6,7 +6,7 @@ import pytest
 
 from vrollout import async_queue
 from vrollout import scorer
-from vrollout import worker
+from vrollout import types
 
 
 @pytest.fixture
@@ -20,7 +20,7 @@ async def test_score_rollouts(queue: async_queue.AsyncQueue, mock_verifier):
     batch_size = 2
     num_rollouts = 8
     items = [
-        worker.RolloutTrajectory(
+        types.RolloutTrajectory(
             request_id=f"req-{i}",
             prompt="",
             prompt_token_ids=[],

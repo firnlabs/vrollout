@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from vrollout import async_queue
-from vrollout import worker
+from vrollout import types
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,7 +13,7 @@ class ScoredRollout:
     """Rollout trajectory with corresponding reward score."""
 
     reward: float
-    trajectory: worker.RolloutTrajectory
+    trajectory: types.RolloutTrajectory
 
 
 async def score_rollouts(

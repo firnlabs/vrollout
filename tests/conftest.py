@@ -25,13 +25,14 @@ from torch.distributed import device_mesh
 from torch.distributed import fsdp
 from torch.distributed.device_mesh import DeviceMesh
 
+from vrollout import generation
 from vrollout import pipeline
-from vrollout import worker
+from vrollout import types
 from vrollout.scorer import ScoredRollout
 from vrollout.types import Rank
+from vrollout.types import RolloutTrajectory
+from vrollout.types import SamplingParams
 from vrollout.types import WorldSize
-from vrollout.worker import RolloutTrajectory
-from vrollout.worker import SamplingParams
 
 P = ParamSpec("P")
 type MultiProcessFn[**P] = Callable[
@@ -107,12 +108,12 @@ def mock_llm_engine(vocab_size) -> MockAsyncLLMEngine:
     return MockAsyncLLMEngine(vocab_size=vocab_size)
 
 
-async def _mock_verifier(rollout: worker.RolloutTrajectory) -> float:
+async def _mock_verifier(rollout: types.RolloutTrajectory) -> float:
     return float(rollout.worker_id % 2)
 
 
 @pytest.fixture
-def mock_verifier() -> Callable[[worker.RolloutTrajectory], Awaitable[float]]:
+def mock_verifier() -> Callable[[types.RolloutTrajectory], Awaitable[float]]:
     return _mock_verifier
 
 
@@ -196,13 +197,13 @@ def prompts(num_prompts) -> list[str]:
 
 
 @pytest.fixture
-def rollout_config() -> worker.RolloutConfig:
-    return worker.RolloutConfig()
+def rollout_config() -> types.RolloutConfig:
+    return types.RolloutConfig()
 
 
 @pytest.fixture
-def rollout_manager(rollout_config, mock_llm_engine) -> worker.RolloutManager:
-    return worker.RolloutManager(rollout_config, mock_llm_engine)
+def rollout_manager(rollout_config, mock_llm_engine) -> generation.RolloutManager:
+    return generation.RolloutManager(rollout_config, mock_llm_engine)
 
 
 @pytest.fixture
