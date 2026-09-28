@@ -46,7 +46,7 @@ repos:
         pass_filenames: false
       - id: pydoclint
         name: Pydoclint signature check
-        entry: uv run pydoclint src tests
+        entry: uvx pydoclint src tests  # run in isolated environment
         language: system
         types: [python]
         stages: [pre-commit]
