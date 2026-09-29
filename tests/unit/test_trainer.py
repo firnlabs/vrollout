@@ -13,9 +13,9 @@ from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 
-from tests.conftest import ToyModel
 from vrollout import trainer as tr
 from vrollout.buffer import DistributedBatch
+from vrollout.testing.models import ToyModel
 from vrollout.types import Rank
 from vrollout.types import WorldSize
 

@@ -1,21 +1,21 @@
 """Tests for engine.py."""
 
 from collections.abc import Awaitable
-from collections.abc import Mapping
 from typing import Callable
 
 import pytest
+import ray
 import torch
 from torch import distributed as dist
 from torch import nn
 from torch import optim
-from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh
 
 from vrollout import engine
 from vrollout import generation
 from vrollout import pipeline
 from vrollout import types
+from vrollout.generation import RolloutManager
 from vrollout.types import Rank
 from vrollout.types import WorldSize
 
@@ -27,16 +27,14 @@ class LazyPipelineBuilder:
         self,
         rollout_config: types.RolloutConfig,
         pipeline_config: pipeline.PipelineConfig,
-        llm_engine: types.AsyncLLMEngine,
         verifier: Callable[[types.RolloutTrajectory], Awaitable[float]],
     ) -> None:
         self.rollout_config = rollout_config
         self.pipeline_config = pipeline_config
-        self.llm_engine = llm_engine
         self.verifier = verifier
 
     def __call__(self) -> pipeline.RolloutPipeline:
-        manager = generation.RolloutManager(self.rollout_config, self.llm_engine)
+        manager = generation.RolloutManager(self.rollout_config)
         return pipeline.RolloutPipeline(manager, self.verifier, self.pipeline_config)
 
 
@@ -47,11 +45,9 @@ def pipeline_config() -> pipeline.PipelineConfig:
 
 @pytest.fixture
 def pipeline_builder(
-    rollout_config, pipeline_config, mock_llm_engine, mock_verifier
+    rollout_config, pipeline_config, mock_verifier
 ) -> Callable[[], pipeline.RolloutPipeline]:
-    return LazyPipelineBuilder(
-        rollout_config, pipeline_config, mock_llm_engine, mock_verifier
-    )
+    return LazyPipelineBuilder(rollout_config, pipeline_config, mock_verifier)
 
 
 @pytest.fixture
@@ -59,12 +55,9 @@ def num_prompts() -> int:
     return 8
 
 
-class MockWeightsReceiver:
-    def __init__(self) -> None:
-        self.weights = None
-
-    def update_weights(self, weights: Mapping[str, Tensor]) -> None:
-        self.weights = weights
+@pytest.fixture
+def num_iterations() -> int:
+    return 3
 
 
 async def _test_train_iteration_worker(
@@ -77,35 +70,39 @@ async def _test_train_iteration_worker(
     actor_model: nn.Module,
     ref_model: nn.Module,
     shard_model: Callable[[nn.Module, DeviceMesh], nn.Module],
+    num_iterations: int,
 ):
+    torch.manual_seed(42 + rank)
+
     if rank == 0:
         rollout_pipeline = pipeline_builder()
         scored_rollouts = await rollout_pipeline.generate_and_score(
             prompts, sampling_params
         )
+        receivers = [rollout_pipeline.manager]
         container = [scored_rollouts]
     else:
+        receivers = []
         container = [None]
 
     dist.broadcast_object_list(container, src=0)
     global_rollouts = container[0]
 
+    ref_model.load_state_dict(actor_model.state_dict())
     sharded_actor = shard_model(actor_model, mesh)
     sharded_ref = shard_model(ref_model, mesh)
     optimizer = optim.AdamW(sharded_actor.parameters())
-    # TODO: use actual receiver (e.g. rollout manager once updated)
-    weights_receiver = MockWeightsReceiver()
     dist_engine = engine.DistributedRLEngine(
         actor=sharded_actor,
         reference=sharded_ref,
         optimizer=optimizer,
-        receivers=[weights_receiver] if rank == 0 else None,
+        receivers=receivers,
         rank=rank,
         world_size=world_size,
     )
 
     losses = []
-    for _ in range(3):
+    for _ in range(num_iterations):
         metrics = dist_engine.train_iteration(global_rollouts)
         assert metrics.rank == rank
         losses.append(metrics.avg_loss)
@@ -113,10 +110,14 @@ async def _test_train_iteration_worker(
     losses_t = torch.tensor(losses)
     assert not any(torch.isnan(losses_t))
     assert all(torch.isfinite(losses_t))
-    assert losses[-1] < losses[0]
 
     if rank == 0:
-        assert weights_receiver.weights is not None
+        assert len(receivers) == 1
+        receiver = receivers[0]
+        assert isinstance(receiver, RolloutManager)
+        statuses = ray.get([w.get_status.remote() for w in receiver.workers])  # ty: ignore[unresolved-attribute]
+        for s in statuses:
+            assert s.weights_version == num_iterations
 
 
 class TestDistributedRLEngine:
@@ -126,10 +127,11 @@ class TestDistributedRLEngine:
         self,
         pipeline_builder: Callable[[], pipeline.RolloutPipeline],
         prompts: list[str],
-        sampling_params,
+        sampling_params: types.SamplingParams,
         actor_model: nn.Module,
         ref_model: nn.Module,
         shard_model: Callable[[nn.Module, DeviceMesh], nn.Module],
+        num_iterations: int,
         run_multiprocess,
     ):
         run_multiprocess(
@@ -140,4 +142,5 @@ class TestDistributedRLEngine:
             actor_model,
             ref_model,
             shard_model,
+            num_iterations,
         )
