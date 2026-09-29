@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import AsyncGenerator
+from typing import AsyncIterator
 from typing import Protocol
 from typing import runtime_checkable
 
@@ -31,20 +31,31 @@ class SampleLogprob(Protocol):
 
 
 class CompletionOutput(Protocol):
-    index: int
-    text: str
-    token_ids: Sequence[int]
-    cumulative_logprob: float
-    logprobs: Sequence[Mapping[int, SampleLogprob | float]] | None = None
-    finish_reason: str | None = "stop"
+    @property
+    def index(self) -> int: ...
+    @property
+    def text(self) -> str: ...
+    @property
+    def token_ids(self) -> Sequence[int]: ...
+    @property
+    def cumulative_logprob(self) -> float: ...
+    @property
+    def logprobs(self) -> Sequence[Mapping[int, SampleLogprob | float]] | None: ...
+    @property
+    def finish_reason(self) -> str | None: ...
 
 
 class RequestOutput(Protocol):
-    request_id: str
-    prompt: str
-    prompt_token_ids: Sequence[int]
-    outputs: Sequence[CompletionOutput]
-    finished: bool
+    @property
+    def request_id(self) -> str: ...
+    @property
+    def prompt(self) -> str: ...
+    @property
+    def prompt_token_ids(self) -> Sequence[int]: ...
+    @property
+    def outputs(self) -> Sequence[CompletionOutput]: ...
+    @property
+    def finished(self) -> bool: ...
 
 
 class AsyncLLMEngine(Protocol):
@@ -55,7 +66,7 @@ class AsyncLLMEngine(Protocol):
         request_id: str,
         *args,
         **kwargs,
-    ) -> AsyncGenerator[RequestOutput, None]: ...
+    ) -> AsyncIterator[RequestOutput]: ...
 
 
 @dataclass

@@ -1,12 +1,20 @@
 """Distributed LLM rollout generation across Ray actors."""
 
 import asyncio
+from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
+from dataclasses import dataclass
 import itertools
+from typing import Any
+from typing import cast
 
 import ray
 from ray.actor import ActorClass
+from ray.actor import ActorProxy
+from torch import Tensor
 
+from vrollout.testing import MockAsyncLLMEngine
 from vrollout.types import AsyncLLMEngine
 from vrollout.types import RequestOutput
 from vrollout.types import RolloutConfig
@@ -49,9 +57,21 @@ def _parse_vllm_output_to_rollout(
     )
 
 
-def _create_default_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
+def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
     """Creates a default vLLM AsyncLLMEngine instance from configuration."""
+    if config.model_name.startswith("mock"):
+        return MockAsyncLLMEngine(config.model_name)
+
     raise NotImplementedError("To be implemented")
+
+
+@dataclass(frozen=True)
+class RolloutWorkerStatus:
+    """Rollout worker status for inspection."""
+
+    worker_id: int
+    llm_engine_type: str
+    weights_version: int
 
 
 class RolloutWorker:
@@ -66,10 +86,9 @@ class RolloutWorker:
         self._worker_id = worker_id
         self._config = config
         self._llm_engine = (
-            llm_engine
-            if llm_engine is not None
-            else _create_default_llm_engine(self._config)
+            _create_llm_engine(self._config) if llm_engine is None else llm_engine
         )
+        self._weights_version = 0
 
     async def _generate_single(
         self, prompt: str, sampling_params: SamplingParams, request_id: str
@@ -94,6 +113,19 @@ class RolloutWorker:
         ]
         return await asyncio.gather(*tasks)
 
+    def update_weights(self, weights: Mapping[str, Tensor]) -> None:
+        if self._llm_engine is not None and hasattr(self._llm_engine, "update_weights"):
+            update_fn = cast(Callable[[Any], None], self._llm_engine.update_weights)
+            update_fn(weights)
+        self._weights_version += 1
+
+    def get_status(self) -> RolloutWorkerStatus:
+        return RolloutWorkerStatus(
+            worker_id=self._worker_id,
+            llm_engine_type=type(self._llm_engine).__name__,
+            weights_version=self._weights_version,
+        )
+
 
 # use ray.remote function style to aid type checking
 ActorRolloutWorker: ActorClass[RolloutWorker] = ray.remote(RolloutWorker)
@@ -102,7 +134,9 @@ ActorRolloutWorker: ActorClass[RolloutWorker] = ray.remote(RolloutWorker)
 class RolloutManager:
     """Manages a pool of Ray RolloutWorker actors and distributes prompt batches."""
 
-    def __init__(self, config: RolloutConfig, llm_engine: AsyncLLMEngine) -> None:
+    def __init__(
+        self, config: RolloutConfig, llm_engine: AsyncLLMEngine | None = None
+    ) -> None:
         self._config = config
         self._workers = [
             ActorRolloutWorker.remote(i, config, llm_engine)
@@ -129,3 +163,11 @@ class RolloutManager:
         # flatten results
         results = [r for chunk in results for r in chunk]
         return results
+
+    def update_weights(self, weights: Mapping[str, Tensor]) -> None:
+        ref = ray.put(weights)
+        ray.get([w.update_weights.remote(ref) for w in self._workers])  # ty: ignore[unresolved-attribute]
+
+    @property
+    def workers(self) -> list[ActorProxy[RolloutWorker]]:
+        return self._workers
