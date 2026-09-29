@@ -8,10 +8,12 @@ from typing import Sequence
 import pytest
 import ray
 from ray.actor import ActorProxy
+import torch
+from torch import Tensor
 
-from tests.conftest import MockAsyncLLMEngine
 from vrollout import generation
 from vrollout import types
+from vrollout.testing import MockAsyncLLMEngine
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -41,7 +43,7 @@ def rollout_config(num_workers: int) -> types.RolloutConfig:
 
 
 @pytest.fixture
-def worker_(
+def worker(
     worker_id: int,
     rollout_config: types.RolloutConfig,
     mock_llm_engine: MockAsyncLLMEngine,
@@ -66,19 +68,24 @@ def actor_worker(
     )
 
 
+@pytest.fixture
+def weights() -> list[Tensor]:
+    return [torch.rand(2, 3) for _ in range(2)]
+
+
 class TestRolloutWorker:
     """Tests for RolloutWorker class."""
 
     @pytest.mark.asyncio
     async def test_generate_batch(
         self,
-        worker_: generation.RolloutWorker,
+        worker: generation.RolloutWorker,
         worker_id: int,
         sampling_params: types.SamplingParams,
     ):
         prompts = ["Prompt 1", "Prompt 2"]
 
-        results = await worker_.generate_batch(prompts, sampling_params)
+        results = await worker.generate_batch(prompts, sampling_params)
 
         assert len(results) == len(prompts)
         for i, (r, p) in enumerate(zip(results, prompts, strict=True)):
@@ -125,13 +132,22 @@ class TestRolloutWorker:
         with pytest.raises(RuntimeError, match="Engine produced no output"):
             await worker._generate_single("prompt", sampling_params, "req_1")
 
+    def test_update_weights(
+        self,
+        worker: generation.RolloutWorker,
+        weights: list[Tensor],
+        mock_llm_engine,
+    ):
+        worker.update_weights(weights)
+
+        assert mock_llm_engine.weights is not None
+
 
 @pytest.fixture
 def manager(
     rollout_config: types.RolloutConfig,
-    mock_llm_engine: MockAsyncLLMEngine,
 ) -> generation.RolloutManager:
-    return generation.RolloutManager(rollout_config, mock_llm_engine)
+    return generation.RolloutManager(rollout_config)
 
 
 class TestRolloutManager:
@@ -165,6 +181,20 @@ class TestRolloutManager:
     ):
         with pytest.raises(ValueError, match="chunk_size must be positive"):
             await manager.generate(["Prompt 1"], sampling_params, chunk_size=0)
+
+    def test_update_weights(
+        self, manager: generation.RolloutManager, weights: list[Tensor]
+    ):
+        manager.update_weights(weights)
+
+        worker_statuses = ray.get(
+            [w.get_status.remote() for w in manager.workers]  # ty: ignore[unresolved-attribute]
+        )
+        assert len(worker_statuses) == len(manager.workers)
+        for s in worker_statuses:
+            assert isinstance(s, generation.RolloutWorkerStatus)
+            assert s.llm_engine_type == "MockAsyncLLMEngine"
+            assert s.weights_version == 1
 
 
 class TestParseVllmOutputToRollout:
