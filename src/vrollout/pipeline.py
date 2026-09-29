@@ -94,3 +94,7 @@ class RolloutPipeline:
         )
 
         return rollout_batch, advantages, target_values
+
+    @property
+    def manager(self) -> generation.RolloutManager:
+        return self._manager

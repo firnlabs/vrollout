@@ -38,8 +38,8 @@ def num_workers() -> int:
 
 
 @pytest.fixture
-def rollout_config(num_workers: int) -> types.RolloutConfig:
-    return types.RolloutConfig(num_workers=num_workers)
+def rollout_config(model_name: str, num_workers: int) -> types.RolloutConfig:
+    return types.RolloutConfig(model_name=model_name, num_workers=num_workers)
 
 
 @pytest.fixture
@@ -69,8 +69,8 @@ def actor_worker(
 
 
 @pytest.fixture
-def weights() -> list[Tensor]:
-    return [torch.rand(2, 3) for _ in range(2)]
+def weights() -> dict[str, Tensor]:
+    return {f"weight_{i}": torch.rand(2, 3) for i in range(2)}
 
 
 class TestRolloutWorker:
@@ -135,12 +135,12 @@ class TestRolloutWorker:
     def test_update_weights(
         self,
         worker: generation.RolloutWorker,
-        weights: list[Tensor],
+        weights: dict[str, Tensor],
         mock_llm_engine,
     ):
         worker.update_weights(weights)
 
-        assert mock_llm_engine.weights is not None
+        assert worker._weights_version == 1
 
 
 @pytest.fixture

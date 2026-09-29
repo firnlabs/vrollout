@@ -13,10 +13,10 @@ from typing import Concatenate
 from typing import ParamSpec
 
 import pytest
+import ray
 from torch import distributed as dist
 from torch import multiprocessing as mp
 from torch import nn
-from torch import Tensor
 from torch.distributed import device_mesh
 from torch.distributed import fsdp
 from torch.distributed.device_mesh import DeviceMesh
@@ -25,7 +25,10 @@ from vrollout import generation
 from vrollout import pipeline
 from vrollout import types
 from vrollout.scorer import ScoredRollout
+from vrollout.testing import create_model
 from vrollout.testing import MockAsyncLLMEngine
+from vrollout.testing import TEST_MODEL_SPECS
+from vrollout.testing import ToyBlock
 from vrollout.types import Rank
 from vrollout.types import RolloutTrajectory
 from vrollout.types import WorldSize
@@ -37,13 +40,40 @@ type MultiProcessFn[**P] = Callable[
 
 
 @pytest.fixture
-def vocab_size() -> int:
-    return 32
+def model_name() -> str:
+    return "test-model"
 
 
 @pytest.fixture
-def mock_llm_engine(vocab_size) -> MockAsyncLLMEngine:
-    return MockAsyncLLMEngine(vocab_size=vocab_size)
+def ref_model(model_name: str) -> nn.Module:
+    model = create_model(model_name)
+    for p in model.parameters():
+        p.requires_grad = False
+    model.eval()
+    return model
+
+
+@pytest.fixture
+def actor_model(model_name: str) -> nn.Module:
+    return create_model(model_name)
+
+
+def _shard_model(model: nn.Module, mesh: DeviceMesh) -> nn.Module:
+    for m in model.modules():
+        if isinstance(m, ToyBlock):
+            fsdp.fully_shard(m, mesh=mesh)
+    fsdp.fully_shard(model, mesh=mesh)
+    return model
+
+
+@pytest.fixture
+def vocab_size(model_name: str) -> int:
+    return TEST_MODEL_SPECS[model_name]["vocab_size"]
+
+
+@pytest.fixture
+def mock_llm_engine(model_name, vocab_size) -> MockAsyncLLMEngine:
+    return MockAsyncLLMEngine(model_name=model_name, vocab_size=vocab_size)
 
 
 async def _mock_verifier(rollout: types.RolloutTrajectory) -> float:
@@ -94,6 +124,8 @@ def _worker_wrapper(
             fn(rank, world_size, mesh, *args)
 
     finally:
+        if ray.is_initialized():
+            ray.shutdown()
         if dist.is_initialized():
             dist.destroy_process_group()
 
@@ -135,89 +167,18 @@ def prompts(num_prompts) -> list[str]:
 
 
 @pytest.fixture
-def rollout_config() -> types.RolloutConfig:
-    return types.RolloutConfig()
+def rollout_config(model_name: str) -> types.RolloutConfig:
+    return types.RolloutConfig(model_name=model_name)
 
 
 @pytest.fixture
-def rollout_manager(rollout_config, mock_llm_engine) -> generation.RolloutManager:
-    return generation.RolloutManager(rollout_config, mock_llm_engine)
+def rollout_manager(rollout_config) -> generation.RolloutManager:
+    return generation.RolloutManager(rollout_config)
 
 
 @pytest.fixture
 def rollout_pipeline(rollout_manager, mock_verifier) -> pipeline.RolloutPipeline:
     return pipeline.RolloutPipeline(rollout_manager, mock_verifier)
-
-
-class Block(nn.Module):
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.ln = nn.LayerNorm(d_model)
-        self.fc1 = nn.Linear(d_model, 4 * d_model)
-        self.act = nn.GELU()
-        self.fc2 = nn.Linear(4 * d_model, d_model)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return x + self.fc2(self.act(self.fc1(self.ln(x))))
-
-
-class ToyModel(nn.Module):
-    def __init__(self, *, d_model: int, num_layers: int, vocab_size: int = 64):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, d_model)
-        self.layers = nn.ModuleList([Block(d_model) for _ in range(num_layers)])
-        self.head = nn.Linear(d_model, vocab_size, bias=False)
-
-    def forward(
-        self, input_ids: Tensor, attention_mask: Tensor | None = None
-    ) -> Tensor:
-        _ = attention_mask  # unused: kept for API compatiblity
-        x = self.embedding(input_ids)
-        for layer in self.layers:
-            x = layer(x)
-        return self.head(x)
-
-
-@pytest.fixture
-def num_layers() -> int:
-    return 2
-
-
-@pytest.fixture
-def d_model() -> int:
-    return 16
-
-
-@pytest.fixture
-def model_builder(
-    d_model: int, num_layers: int, vocab_size: int
-) -> Callable[[], ToyModel]:
-    def _model_factory():
-        return ToyModel(d_model=d_model, num_layers=num_layers, vocab_size=vocab_size)
-
-    return _model_factory
-
-
-@pytest.fixture
-def ref_model(model_builder: Callable[[], ToyModel]) -> ToyModel:
-    model = model_builder()
-    for p in model.parameters():
-        p.requires_grad = False
-    model.eval()
-    return model
-
-
-@pytest.fixture
-def actor_model(model_builder: Callable[[], ToyModel]) -> ToyModel:
-    return model_builder()
-
-
-def _shard_model(model: nn.Module, mesh: DeviceMesh) -> nn.Module:
-    for m in model.modules():
-        if isinstance(m, Block):
-            fsdp.fully_shard(m, mesh=mesh)
-    fsdp.fully_shard(model, mesh=mesh)
-    return model
 
 
 @pytest.fixture

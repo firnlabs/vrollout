@@ -19,6 +19,7 @@ from torch.distributed.fsdp import FSDPModule
 from vrollout import sync
 
 
+# TODO: use testing module model classes instead
 class ToyBlock(nn.Module):
     def __init__(self, d_model: int):
         super().__init__()

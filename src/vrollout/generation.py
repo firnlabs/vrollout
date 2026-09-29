@@ -59,10 +59,10 @@ def _parse_vllm_output_to_rollout(
 
 def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
     """Creates a default vLLM AsyncLLMEngine instance from configuration."""
-    if config.model_name.startswith("mock"):
-        return MockAsyncLLMEngine(config.model_name)
+    if config.model_name.startswith("test"):
+        return MockAsyncLLMEngine(model_name=config.model_name)
 
-    raise NotImplementedError("To be implemented")
+    raise NotImplementedError("To be implemented.")
 
 
 @dataclass(frozen=True)
@@ -135,12 +135,12 @@ class RolloutManager:
     """Manages a pool of Ray RolloutWorker actors and distributes prompt batches."""
 
     def __init__(
-        self, config: RolloutConfig, llm_engine: AsyncLLMEngine | None = None
+        self,
+        config: RolloutConfig,
     ) -> None:
         self._config = config
         self._workers = [
-            ActorRolloutWorker.remote(i, config, llm_engine)
-            for i in range(config.num_workers)
+            ActorRolloutWorker.remote(i, config) for i in range(config.num_workers)
         ]
         self._worker_cycler = itertools.cycle(self._workers)
 
