@@ -17,6 +17,7 @@ coverage.json
 
 # Local custom folders
 scratch/
+output/
 
 # OS files
 .DS_Store
