@@ -7,6 +7,8 @@ import itertools
 import logging
 from typing import Any
 
+from beartype import beartype
+from jaxtyping import Float
 from torch import Tensor
 
 from vrollout import async_queue
@@ -71,12 +73,17 @@ class RolloutPipeline:
 
         return await scorer_task
 
+    @beartype
     async def generate_and_compute_gae(
         self,
         prompts: Sequence[str],
         sampling_params: types.SamplingParams | None = None,
         # TODO: add values, next_values, device parameters for GAE computation
-    ) -> tuple[collate.RolloutBatch, Tensor, Tensor]:
+    ) -> tuple[
+        collate.RolloutBatch,
+        Float[Tensor, "batch completion_len"],
+        Float[Tensor, "batch completion_len"],
+    ]:
         """Generates batched rollouts, scores them and computes GAE for each batch."""
         scored_rollouts = await self.generate_and_score(prompts, sampling_params)
 

@@ -1,5 +1,10 @@
 """Models for testing."""
 
+from beartype import beartype
+from jaxtyping import Bool
+from jaxtyping import Float
+from jaxtyping import Int64
+from jaxtyping import jaxtyped
 from torch import nn
 from torch import Tensor
 
@@ -12,7 +17,10 @@ class ToyBlock(nn.Module):
         self.act = nn.GELU()
         self.fc2 = nn.Linear(4 * d_model, d_model)
 
-    def forward(self, x: Tensor) -> Tensor:
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[Tensor, "batch seq_len d_model"]
+    ) -> Float[Tensor, "batch seq_len d_model"]:
         return x + self.fc2(self.act(self.fc1(self.ln(x))))
 
 
@@ -23,9 +31,14 @@ class ToyModel(nn.Module):
         self.layers = nn.ModuleList([ToyBlock(d_model) for _ in range(num_layers)])
         self.head = nn.Linear(d_model, vocab_size, bias=False)
 
+    @jaxtyped(typechecker=beartype)
     def forward(
-        self, input_ids: Tensor, attention_mask: Tensor | None = None
-    ) -> Tensor:
+        self,
+        input_ids: Int64[Tensor, "batch seq_len"],
+        attention_mask: Bool[Tensor, "batch seq_len"]
+        | Float[Tensor, "batch seq_len"]
+        | None = None,
+    ) -> Float[Tensor, "batch seq_len vocab_size"]:
         _ = attention_mask  # unused: kept for API compatiblity
         x = self.embedding(input_ids)
         for layer in self.layers:

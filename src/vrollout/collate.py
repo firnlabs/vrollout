@@ -3,6 +3,10 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from beartype import beartype
+from jaxtyping import Float
+from jaxtyping import Int64
+from jaxtyping import jaxtyped
 import torch
 from torch import Tensor
 
@@ -13,19 +17,21 @@ def _get_sequence_lengths(scored_rollouts: Sequence[scorer.ScoredRollout]) -> li
     return [len(sr.trajectory.completion_token_ids) for sr in scored_rollouts]
 
 
+@jaxtyped(typechecker=beartype)
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RolloutBatch:
     """Collated and padded batch of trajectory data for GAE calculation."""
 
-    completion_token_ids: Tensor  # (B, T_max), int64
-    rewards: Tensor  # (B, T_max), float32
-    values: Tensor  # (B, T_max), float32
-    next_values: Tensor  # (B, ), float32
-    dones: Tensor  # (B, T_max), float32
-    attention_mask: Tensor  # (B, T_max), float32
-    seq_lens: Tensor  # (B,), int64
+    completion_token_ids: Int64[Tensor, "batch completion_len"]
+    rewards: Float[Tensor, "batch completion_len"]
+    values: Float[Tensor, "batch completion_len"]
+    next_values: Float[Tensor, "batch"]
+    dones: Float[Tensor, "batch completion_len"]
+    attention_mask: Float[Tensor, "batch completion_len"]
+    seq_lens: Int64[Tensor, "batch"]
 
 
+@jaxtyped(typechecker=beartype)
 def collate_rollouts_for_gae(
     scored_rollouts: Sequence[scorer.ScoredRollout],
     values: Sequence[Sequence[float]] | None = None,

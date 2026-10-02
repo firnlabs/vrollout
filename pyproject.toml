@@ -9,6 +9,8 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.14.0",
+    "beartype>=0.22.9",
+    "jaxtyping>=0.3.11",
     "numpy>=2.3.5",
     "ray>=2.57.0",
     "rich>=15.0.0",
@@ -83,6 +85,8 @@ select = [
 ignore = [
     "D1",    # Ignore missing docstrings
     "D203",  # Conflict with D211
+    "F722",  # Syntax error in forward annotation (jaxtyping shape syntax)
+    "F821",  # Undefined name (jaxtyping dimension literals)
 ]
 
 [tool.ruff.lint.pydocstyle]

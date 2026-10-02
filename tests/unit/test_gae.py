@@ -29,11 +29,12 @@ class TestComputeGAETorch:
         assert torch.allclose(target_values, advantages + values, atol=1e-5)
 
     def test_error_max_seq_len_zero(self):
-        rewards = torch.tensor([])
-        values = torch.zeros((3,))
-        next_values = torch.zeros((1,))
-        dones = torch.zeros_like(values)
-        seq_lens = torch.tensor([])
+        batch_size = 3
+        rewards = torch.zeros((batch_size, 0), dtype=torch.float32)
+        values = torch.zeros((batch_size, 0), dtype=torch.float32)
+        next_values = torch.zeros((batch_size,), dtype=torch.float32)
+        dones = torch.zeros((batch_size, 0), dtype=torch.float32)
+        seq_lens = torch.zeros((batch_size,), dtype=torch.int64)
 
         with pytest.raises(ValueError, match="Maximum sequence length is zero."):
             gae.compute_gae_torch(rewards, values, next_values, dones, seq_lens)
@@ -152,18 +153,22 @@ class TestComputeGAE:
 
     def test_compute_gae_torch_path(self, mocker):
         mocker.patch.object(gae, "TRITON_AVAILABLE", False)
+        batch_size = 2
+        seq_len = 4
+        expected_adv = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        expected_tgt = torch.zeros((batch_size, seq_len), dtype=torch.float32)
         mock_torch = mocker.patch.object(
             gae,
             "compute_gae_torch",
-            return_value=(mocker.MagicMock(), mocker.MagicMock()),
+            return_value=(expected_adv, expected_tgt),
         )
         mock_triton = mocker.patch.object(gae, "compute_gae_triton")
 
-        rewards = mocker.MagicMock()
-        values = mocker.MagicMock()
-        next_values = mocker.MagicMock()
-        dones = mocker.MagicMock()
-        seq_lens = mocker.MagicMock()
+        rewards = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        values = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        next_values = torch.zeros((batch_size,), dtype=torch.float32)
+        dones = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        seq_lens = torch.zeros((batch_size,), dtype=torch.int64)
         gamma = 0.99
         lam = 0.95
 
@@ -180,18 +185,22 @@ class TestComputeGAE:
     def test_compute_gae_triton_path(self, mocker):
         mocker.patch.object(gae, "TRITON_AVAILABLE", True)
         mocker.patch.object(torch.cuda, "is_available", return_value=True)
+        batch_size = 2
+        seq_len = 4
+        expected_adv = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        expected_tgt = torch.zeros((batch_size, seq_len), dtype=torch.float32)
         mock_triton = mocker.patch.object(
             gae,
             "compute_gae_triton",
-            return_value=(mocker.MagicMock(), mocker.MagicMock()),
+            return_value=(expected_adv, expected_tgt),
         )
         mock_torch = mocker.patch.object(gae, "compute_gae_torch")
 
-        rewards = mocker.MagicMock()
-        values = mocker.MagicMock()
-        next_values = mocker.MagicMock()
-        dones = mocker.MagicMock()
-        seq_lens = mocker.MagicMock()
+        rewards = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        values = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        next_values = torch.zeros((batch_size,), dtype=torch.float32)
+        dones = torch.zeros((batch_size, seq_len), dtype=torch.float32)
+        seq_lens = torch.zeros((batch_size,), dtype=torch.int64)
         gamma = 0.99
         lam = 0.95
 

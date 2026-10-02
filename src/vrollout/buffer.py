@@ -2,6 +2,11 @@
 
 from dataclasses import dataclass
 
+from beartype import beartype
+from jaxtyping import Bool
+from jaxtyping import Float
+from jaxtyping import Int64
+from jaxtyping import jaxtyped
 import torch
 from torch import Tensor
 
@@ -10,13 +15,13 @@ from vrollout.types import Rank
 from vrollout.types import WorldSize
 
 
-# TODO: add jaxtyping tensor type, shape
+@jaxtyped(typechecker=beartype)
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DistributedBatch:
-    input_ids: Tensor
-    loss_mask: Tensor
-    attention_mask: Tensor
-    rewards: Tensor
+    input_ids: Int64[Tensor, "batch seq_len"]
+    loss_mask: Bool[Tensor, "batch seq_len"]
+    attention_mask: Bool[Tensor, "batch seq_len"]
+    rewards: Float[Tensor, "batch"]
 
 
 def _get_max_seq_len(scored_rollouts: list[ScoredRollout]) -> int:
@@ -40,6 +45,7 @@ class DistributedRolloutBuffer:
         self._max_seq_len = _get_max_seq_len(scored_rollouts)
         self._pad_token_id = pad_token_id
 
+    @jaxtyped(typechecker=beartype)
     def _create_distributed_batch(
         self, batch: list[ScoredRollout], device: str | torch.device = "cpu"
     ) -> DistributedBatch:
@@ -76,6 +82,7 @@ class DistributedRolloutBuffer:
             rewards=rewards,
         )
 
+    @jaxtyped(typechecker=beartype)
     def get_rank_batch(
         self, rank: Rank, world_size: WorldSize, device: str | torch.device = "cpu"
     ) -> DistributedBatch:

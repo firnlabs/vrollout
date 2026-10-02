@@ -10,6 +10,10 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
+from beartype import beartype
+from jaxtyping import Float
+from jaxtyping import jaxtyped
+from jaxtyping import Shaped
 import torch
 from torch import nn
 from torch import Tensor
@@ -41,7 +45,10 @@ class RequestOutput:
     finished: bool
 
 
-def _sample_next_token(next_token_logits: Tensor, temperature: float) -> int:
+@jaxtyped(typechecker=beartype)
+def _sample_next_token(
+    next_token_logits: Float[Tensor, "vocab_size"], temperature: float
+) -> int:
     if temperature < 1e-4:
         return int(torch.argmax(next_token_logits).item())
 
@@ -138,7 +145,8 @@ class MockAsyncLLMEngine:
                 finished=is_finished,
             )
 
-    def update_weights(self, weights: Mapping[str, Tensor]) -> None:
+    @jaxtyped(typechecker=beartype)
+    def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:
         assert self.model is not None
         with torch.no_grad():
             self.model.load_state_dict(weights, strict=False)

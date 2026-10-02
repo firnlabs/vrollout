@@ -9,6 +9,9 @@ import itertools
 from typing import Any
 from typing import cast
 
+from beartype import beartype
+from jaxtyping import jaxtyped
+from jaxtyping import Shaped
 import ray
 from ray.actor import ActorClass
 from ray.actor import ActorProxy
@@ -113,7 +116,8 @@ class RolloutWorker:
         ]
         return await asyncio.gather(*tasks)
 
-    def update_weights(self, weights: Mapping[str, Tensor]) -> None:
+    @jaxtyped(typechecker=beartype)
+    def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:
         if self._llm_engine is not None and hasattr(self._llm_engine, "update_weights"):
             update_fn = cast(Callable[[Any], None], self._llm_engine.update_weights)
             update_fn(weights)
@@ -164,7 +168,8 @@ class RolloutManager:
         results = [r for chunk in results for r in chunk]
         return results
 
-    def update_weights(self, weights: Mapping[str, Tensor]) -> None:
+    @jaxtyped(typechecker=beartype)
+    def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:
         ref = ray.put(weights)
         ray.get([w.update_weights.remote(ref) for w in self._workers])  # ty: ignore[unresolved-attribute]
 

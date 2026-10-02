@@ -1,5 +1,9 @@
 """Generalized advantage estimation (GAE)."""
 
+from beartype import beartype
+from jaxtyping import Float
+from jaxtyping import Int64
+from jaxtyping import jaxtyped
 import torch
 from torch import Tensor
 
@@ -12,15 +16,19 @@ else:
     TRITON_AVAILABLE = True
 
 
+@jaxtyped(typechecker=beartype)
 def compute_gae_torch(
-    rewards: Tensor,  # (B, T)
-    values: Tensor,  # (B, T)
-    next_values: Tensor,  # (B, )
-    dones: Tensor,  # (B, T)
-    seq_lens: Tensor,  # (B, )
+    rewards: Float[Tensor, "batch completion_len"],
+    values: Float[Tensor, "batch completion_len"],
+    next_values: Float[Tensor, "batch"],
+    dones: Float[Tensor, "batch completion_len"],
+    seq_lens: Int64[Tensor, "batch"],
     gamma: float = 0.99,
     lam: float = 0.95,
-) -> tuple[Tensor, Tensor]:  # (B, T),  (B, T)
+) -> tuple[
+    Float[Tensor, "batch completion_len"],
+    Float[Tensor, "batch completion_len"],
+]:
     """Computes generalized advantage estimation (GAE) using PyTorch primitives."""
     max_seq_len = rewards.shape[-1]
     if max_seq_len == 0:
@@ -118,15 +126,19 @@ if TRITON_AVAILABLE:
             #  update bootstrap value with current step's value for previous time step
             next_value = value
 
+    @jaxtyped(typechecker=beartype)
     def compute_gae_triton(
-        rewards: Tensor,  # (B, T)
-        values: Tensor,  # (B, T)
-        next_values: Tensor,  # (B, )
-        dones: Tensor,  # (B, T)
-        seq_lens: Tensor,  # (B, )
+        rewards: Float[Tensor, "batch completion_len"],
+        values: Float[Tensor, "batch completion_len"],
+        next_values: Float[Tensor, "batch"],
+        dones: Float[Tensor, "batch completion_len"],
+        seq_lens: Int64[Tensor, "batch"],
         gamma: float = 0.99,
         lam: float = 0.95,
-    ) -> tuple[Tensor, Tensor]:  # pragma: no cover
+    ) -> tuple[  # pragma: no cover
+        Float[Tensor, "batch completion_len"],
+        Float[Tensor, "batch completion_len"],
+    ]:
         """Computes generalized advantage estimation (GAE) using Triton fused kernel."""
         B, T = rewards.shape
         if values.shape != (B, T):
@@ -168,28 +180,36 @@ if TRITON_AVAILABLE:
         return advantages, target_values
 else:
 
+    @jaxtyped(typechecker=beartype)
     def compute_gae_triton(
-        rewards: Tensor,  # (B, T)
-        values: Tensor,  # (B, T)
-        next_values: Tensor,  # (B, )
-        dones: Tensor,  # (B, T)
-        seq_lens: Tensor,  # (B, )
+        rewards: Float[Tensor, "batch completion_len"],
+        values: Float[Tensor, "batch completion_len"],
+        next_values: Float[Tensor, "batch"],
+        dones: Float[Tensor, "batch completion_len"],
+        seq_lens: Int64[Tensor, "batch"],
         gamma: float = 0.99,
         lam: float = 0.95,
-    ) -> tuple[Tensor, Tensor]:  # pragma: no cover
+    ) -> tuple[  # pragma: no cover
+        Float[Tensor, "batch completion_len"],
+        Float[Tensor, "batch completion_len"],
+    ]:
         """Computes generalized advantage estimation (GAE) using Triton fused kernel."""
         raise RuntimeError("Triton is not available in the current environment.")
 
 
+@jaxtyped(typechecker=beartype)
 def compute_gae(
-    rewards: Tensor,  # (B, T)
-    values: Tensor,  # (B, T)
-    next_values: Tensor,  # (B, )
-    dones: Tensor,  # (B, T)
-    seq_lens: Tensor,  # (B, )
+    rewards: Float[Tensor, "batch completion_len"],
+    values: Float[Tensor, "batch completion_len"],
+    next_values: Float[Tensor, "batch"],
+    dones: Float[Tensor, "batch completion_len"],
+    seq_lens: Int64[Tensor, "batch"],
     gamma: float = 0.99,
     lam: float = 0.95,
-) -> tuple[Tensor, Tensor]:  # (B, T),  (B, T)
+) -> tuple[
+    Float[Tensor, "batch completion_len"],
+    Float[Tensor, "batch completion_len"],
+]:
     """Computes generalized advantage estimation (GAE)."""
     if TRITON_AVAILABLE and torch.cuda.is_available():
         return compute_gae_triton(
