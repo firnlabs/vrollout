@@ -47,7 +47,7 @@ def create_batch(
         input_ids=input_ids,
         loss_mask=loss_mask,
         attention_mask=attention_mask,
-        rewards=torch.randint(0, 2, (batch_size,)),
+        rewards=torch.randint(0, 2, (batch_size,)).float(),
     )
 
 

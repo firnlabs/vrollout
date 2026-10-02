@@ -11,6 +11,7 @@ type Rank = int
 type WorldSize = int
 
 
+@runtime_checkable
 class SamplingParams(Protocol):
     """LLM sampling parameters for generation.
 
@@ -30,6 +31,7 @@ class SampleLogprob(Protocol):
     decoded_token: str | None = None
 
 
+@runtime_checkable
 class CompletionOutput(Protocol):
     @property
     def index(self) -> int: ...
@@ -45,6 +47,7 @@ class CompletionOutput(Protocol):
     def finish_reason(self) -> str | None: ...
 
 
+@runtime_checkable
 class RequestOutput(Protocol):
     @property
     def request_id(self) -> str: ...
@@ -58,6 +61,7 @@ class RequestOutput(Protocol):
     def finished(self) -> bool: ...
 
 
+@runtime_checkable
 class AsyncLLMEngine(Protocol):
     def generate(
         self,

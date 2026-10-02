@@ -2,7 +2,11 @@
 
 from collections.abc import Mapping
 from typing import Protocol
+from typing import runtime_checkable
 
+from beartype import beartype
+from jaxtyping import jaxtyped
+from jaxtyping import Shaped
 from torch import nn
 from torch import Tensor
 from torch.distributed.tensor import DTensor
@@ -10,8 +14,9 @@ from torch.distributed.tensor import DTensor
 from vrollout.types import Rank
 
 
+@runtime_checkable
 class WeightsReceiver(Protocol):
-    def update_weights(self, weights: Mapping[str, Tensor]) -> None: ...
+    def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None: ...
 
 
 class WeightBroadcaster:
@@ -26,6 +31,7 @@ class WeightBroadcaster:
         self._rank = rank
         self._receivers = receivers or []
 
+    @jaxtyped(typechecker=beartype)
     def extract_and_broadcast(self, model: nn.Module) -> None:
         """Extracts model unsharded parameters and broadcasts them to Ray workers."""
         weights = {}
