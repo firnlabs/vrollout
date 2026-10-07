@@ -1,4 +1,4 @@
-"""Prepares scored rollouts for FSDP processing."""
+"""Distributed experience buffer and batch collation across process ranks."""
 
 from dataclasses import dataclass
 
@@ -18,6 +18,8 @@ from vrollout.types import WorldSize
 @jaxtyped(typechecker=beartype)
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DistributedBatch:
+    """Padded batch of scored rollouts for distributed training."""
+
     input_ids: Int64[Tensor, "batch seq_len"]
     loss_mask: Bool[Tensor, "batch seq_len"]
     attention_mask: Bool[Tensor, "batch seq_len"]
@@ -35,7 +37,7 @@ def _get_max_seq_len(scored_rollouts: list[ScoredRollout]) -> int:
 
 
 class DistributedRolloutBuffer:
-    """Batches scored rollouts based on FSDP process rank."""
+    """Partitions and collates scored rollouts across distributed training ranks."""
 
     def __init__(
         self, scored_rollouts: list[ScoredRollout], pad_token_id: int = 0
@@ -86,7 +88,7 @@ class DistributedRolloutBuffer:
     def get_rank_batch(
         self, rank: Rank, world_size: WorldSize, device: str | torch.device = "cpu"
     ) -> DistributedBatch:
-        """Returns collated DistributedBatch from rollouts based on rank."""
+        """Collates and returns padded `DistributedBatch` assigned to `rank`."""
         if world_size <= 0:
             raise ValueError(f"world_size must be positive, got {world_size}")
         if not 0 <= rank < world_size:

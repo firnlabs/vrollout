@@ -1,5 +1,3 @@
-"""Tests for buffer.py."""
-
 import pytest
 import torch
 from torch.distributed.device_mesh import DeviceMesh
@@ -32,8 +30,6 @@ def _test_get_rank_batch_worker(
 
 
 class TestDistributedRolloutBuffer:
-    """Tests for DistributedRolloutBuffer."""
-
     def test_get_rank_batch_local(
         self, scored_rollouts: list[ScoredRollout], prompt_len: int
     ) -> None:

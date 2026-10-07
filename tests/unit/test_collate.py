@@ -1,5 +1,3 @@
-"""Tests for collate.py."""
-
 import pytest
 import torch
 

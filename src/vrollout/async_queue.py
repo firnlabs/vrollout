@@ -1,4 +1,4 @@
-"""Implements asynchronous queue."""
+"""Asynchronous bounded queue with batched retrieval and backpressure."""
 
 import asyncio
 from collections.abc import Sequence
@@ -7,21 +7,21 @@ from typing import Any
 
 
 class AsyncQueue:
-    """Asynchronous queue with backpressure handling."""
+    """Asynchronous queue with backpressure handling for rollout pipelining."""
 
     def __init__(self, maxsize: int = 1000):
         self._maxsize = maxsize
         self._queue = asyncio.Queue(maxsize=self._maxsize)
 
     async def put_items(self, items: Sequence[Any]) -> None:
-        """Enqueues a batch of completed rollouts."""
+        """Enqueues items sequentially, applying backpressure when the queue is full."""
         for item in items:
             await self._queue.put(item)
 
     async def get_batch(
         self, batch_size: int = 32, timeout_sec: float = 0.1
     ) -> list[Any]:
-        """Returns a batch of items from the queue."""
+        """Collects up to `batch_size` items within timeout window."""
         batches = []
         try:
             async with asyncio.timeout(timeout_sec):
@@ -34,14 +34,14 @@ class AsyncQueue:
         return batches
 
     def qsize(self) -> int:
-        """Returns the number of items in the queue."""
+        """Returns the number of items currently in the queue."""
         return self._queue.qsize()
 
     def task_done(self, n: int = 1) -> None:
-        """Marks a set of items retrieved from the queue as 'done'."""
+        """Marks `n` processed items as finished for queue task accounting."""
         for _ in range(n):
             self._queue.task_done()
 
     async def join(self) -> None:
-        """Block and wait until all unfinished tasks (items) are done."""
+        """Blocks until all enqueued items have been marked finished via `task_done`."""
         await self._queue.join()

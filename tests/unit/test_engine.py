@@ -1,5 +1,3 @@
-"""Unit tests for engine.py."""
-
 from collections.abc import Callable
 
 import pytest
@@ -29,8 +27,6 @@ def engine_builder(
 
 
 class TestDistributedRLEngine:
-    """Tests for DistributedRLEngine."""
-
     @pytest.mark.parametrize(
         "rank, world_size",
         [

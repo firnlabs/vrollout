@@ -1,5 +1,3 @@
-"""Tests for scorer.py."""
-
 import asyncio
 
 import pytest

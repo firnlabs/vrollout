@@ -1,4 +1,8 @@
-"""Integration test for pipeline.py."""
+"""Integration tests for RolloutPipeline end-to-end execution.
+
+Verifies concurrent rollout generation via Ray worker pools, asynchronous queue
+backpressure, trajectory reward scoring, and batched GAE computation.
+"""
 
 import collections
 import time
@@ -13,8 +17,6 @@ from vrollout import types
 
 
 class TestRolloutPipeline:
-    """Tests for RolloutPipeline class."""
-
     @pytest.mark.asyncio
     async def test_generate_and_score(
         self, rollout_pipeline, num_prompts, prompts, sampling_params, rollout_config

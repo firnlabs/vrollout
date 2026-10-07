@@ -1,4 +1,4 @@
-"""Broadcasts unshared weights multiple receivers."""
+"""Weight extraction and broadcasting from FSDP2 to inference receivers."""
 
 from collections.abc import Mapping
 from typing import Protocol
@@ -16,14 +16,13 @@ from vrollout.types import Rank
 
 @runtime_checkable
 class WeightsReceiver(Protocol):
+    """Protocol for entities capable of receiving updated model weights."""
+
     def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None: ...
 
 
 class WeightBroadcaster:
-    """Broadcasts unshared weights from FSDP to Ray workers.
-
-    This should be created and run within an PyTorch FSDP2 process.
-    """
+    """Broadcasts gathered FSDP parameters from rank 0 to receivers."""
 
     def __init__(
         self, rank: Rank, receivers: list[WeightsReceiver] | None = None
@@ -33,7 +32,7 @@ class WeightBroadcaster:
 
     @jaxtyped(typechecker=beartype)
     def extract_and_broadcast(self, model: nn.Module) -> None:
-        """Extracts model unsharded parameters and broadcasts them to Ray workers."""
+        """Extracts full parameters and dispatches detached weights to receivers."""
         weights = {}
         for n, p in model.named_parameters():
             full_p = p.full_tensor() if isinstance(p, DTensor) else p
