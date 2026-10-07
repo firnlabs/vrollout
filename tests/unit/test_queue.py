@@ -1,5 +1,3 @@
-"""Tests for queue.py."""
-
 import asyncio
 import logging
 import time
@@ -20,8 +18,6 @@ def queue(queue_size: int) -> async_queue.AsyncQueue:
 
 
 class TestAsyncQueue:
-    """Tests for AsyncQueue class."""
-
     @pytest.mark.asyncio
     async def test_put_rollouts(self, queue: async_queue.AsyncQueue):
         items = [1, 2, 3]

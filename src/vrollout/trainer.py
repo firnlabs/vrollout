@@ -1,4 +1,4 @@
-"""Runs model training."""
+"""Policy gradient optimization with reference model regularization."""
 
 from beartype import beartype
 from jaxtyping import Float
@@ -28,7 +28,7 @@ def _compute_logprobs(
 
 
 class ModelTrainer:
-    """Runs model training."""
+    """Dual actor-reference policy trainer with KL-divergence penalty."""
 
     def __init__(
         self,
@@ -44,6 +44,7 @@ class ModelTrainer:
 
     @jaxtyped(typechecker=beartype)
     def train_step(self, dist_batch: DistributedBatch) -> float:
+        """Executes optimization step computing REINFORCE loss with KL penalty."""
         self._optimizer.zero_grad()
 
         actor_token_log_probs = _compute_logprobs(self._actor, dist_batch)

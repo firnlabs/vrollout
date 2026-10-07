@@ -1,4 +1,8 @@
-"""Tests for engine.py."""
+"""Integration tests for DistributedRLEngine and RolloutPipeline synchronization.
+
+Spawns multi-process Gloo training ranks alongside Ray rollout workers, verifying end-
+to-end rollout collection, training, and weight broadcast across iterations.
+"""
 
 from collections.abc import Awaitable
 from typing import Callable
@@ -121,8 +125,6 @@ async def _test_train_iteration_worker(
 
 
 class TestDistributedRLEngine:
-    """Tests for DistributedRLEngine."""
-
     def test_train_iteration(
         self,
         pipeline_builder: Callable[[], pipeline.RolloutPipeline],

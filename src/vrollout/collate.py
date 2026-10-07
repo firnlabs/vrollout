@@ -1,4 +1,4 @@
-"""Collate rollouts for GAE computation."""
+"""Batch collation and padding of scored rollouts for GAE computation."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -39,6 +39,7 @@ def collate_rollouts_for_gae(
     pad_token_id: int = 0,
     device: str | torch.device = "cpu",
 ) -> RolloutBatch:
+    """Collates variable-length scored rollouts into padded 2D tensors for GAE."""
     if not scored_rollouts:
         raise ValueError("`scored_rollouts` is empty")
 

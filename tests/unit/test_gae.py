@@ -1,5 +1,3 @@
-"""Tests for gae.py."""
-
 import pytest
 import torch
 
@@ -7,8 +5,6 @@ from vrollout import gae
 
 
 class TestComputeGAETorch:
-    """Tests for compute_gae_torch function."""
-
     def test_no_padding(self):
         batch_size = 4
         seq_len = 8
@@ -120,8 +116,6 @@ class TestComputeGAETorch:
     reason="Requires OpenAI Triton and CUDA-enabled GPU",
 )
 class TestComputeGAETriton:
-    """Tests for compute_gae_triton function."""
-
     def test_numerical_parity_with_gae_torch(self):
         torch.manual_seed(42)
         B, T = 8, 64
@@ -149,8 +143,6 @@ class TestComputeGAETriton:
 
 
 class TestComputeGAE:
-    """Tests for compute_gae function."""
-
     def test_compute_gae_torch_path(self, mocker):
         mocker.patch.object(gae, "TRITON_AVAILABLE", False)
         batch_size = 2

@@ -110,6 +110,7 @@ class RolloutWorker:
     async def generate_batch(
         self, prompts: Sequence[str], sampling_params: SamplingParams
     ) -> list[RolloutTrajectory]:
+        """Generates rollout trajectories asynchronouslyfor a batch of prompts."""
         tasks = [
             self._generate_single(p, sampling_params, f"request_{i}")
             for i, p in enumerate(prompts)
@@ -118,12 +119,14 @@ class RolloutWorker:
 
     @jaxtyped(typechecker=beartype)
     def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:
+        """Updates engine weights, bumping weights version."""
         if self._llm_engine is not None and hasattr(self._llm_engine, "update_weights"):
             update_fn = cast(Callable[[Any], None], self._llm_engine.update_weights)
             update_fn(weights)
         self._weights_version += 1
 
     def get_status(self) -> RolloutWorkerStatus:
+        """Returns snapshot of worker status."""
         return RolloutWorkerStatus(
             worker_id=self._worker_id,
             llm_engine_type=type(self._llm_engine).__name__,
@@ -136,7 +139,7 @@ ActorRolloutWorker: ActorClass[RolloutWorker] = ray.remote(RolloutWorker)
 
 
 class RolloutManager:
-    """Manages a pool of Ray RolloutWorker actors and distributes prompt batches."""
+    """Manages a pool of Ray `RolloutWorker` actors and distributes prompt batches."""
 
     def __init__(
         self,
@@ -154,6 +157,7 @@ class RolloutManager:
         sampling_params: SamplingParams,
         chunk_size: int = 8,
     ) -> list[RolloutTrajectory]:
+        """Dispatches prompt chunks in round-robin order to Ray rollout workers."""
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
 
@@ -170,6 +174,7 @@ class RolloutManager:
 
     @jaxtyped(typechecker=beartype)
     def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:
+        """Broadcasts updated weights to all remote Ray workers via Ray object store."""
         ref = ray.put(weights)
         ray.get([w.update_weights.remote(ref) for w in self._workers])  # ty: ignore[unresolved-attribute]
 

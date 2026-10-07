@@ -26,6 +26,8 @@ class SamplingParams(Protocol):
 
 @runtime_checkable
 class SampleLogprob(Protocol):
+    """Token-level log-probability metadata protocol."""
+
     logprob: float
     rank: int | None = None
     decoded_token: str | None = None
@@ -33,6 +35,8 @@ class SampleLogprob(Protocol):
 
 @runtime_checkable
 class CompletionOutput(Protocol):
+    """Candidate completion output protocol emitted by an LLM engine."""
+
     @property
     def index(self) -> int: ...
     @property
@@ -49,6 +53,8 @@ class CompletionOutput(Protocol):
 
 @runtime_checkable
 class RequestOutput(Protocol):
+    """Request-level generation result protocol emitted by an LLM engine."""
+
     @property
     def request_id(self) -> str: ...
     @property
@@ -63,6 +69,8 @@ class RequestOutput(Protocol):
 
 @runtime_checkable
 class AsyncLLMEngine(Protocol):
+    """Asynchronous LLM generation engine protocol (e.g. vLLM engine)."""
+
     def generate(
         self,
         prompt: str,

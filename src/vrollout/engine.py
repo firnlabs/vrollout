@@ -1,4 +1,4 @@
-"""Distributed RL training engine."""
+"""Distributed RL training engine coordinating rollout batching and weight broadcast."""
 
 from dataclasses import dataclass
 
@@ -18,6 +18,8 @@ from vrollout.types import WorldSize
 
 @dataclass(frozen=True)
 class RLEngineConfig:
+    """Configuration for distributed RL training iterations."""
+
     pad_token_id: int = 0
     beta: float = 0.1
     train_steps_per_iteration: int = 1
@@ -25,12 +27,14 @@ class RLEngineConfig:
 
 @dataclass(frozen=True)
 class TrainIterationMetrics:
+    """Per-rank training metrics for a single optimization iteration."""
+
     avg_loss: float
     rank: int
 
 
 class DistributedRLEngine:
-    """Distributed RL training engine."""
+    """Distributed training engine for batch sharding, training, and weights sync."""
 
     def __init__(
         self,
@@ -72,6 +76,7 @@ class DistributedRLEngine:
     def train_iteration(
         self, scored_rollouts: list[ScoredRollout], device: torch.device | str = "cpu"
     ) -> TrainIterationMetrics:
+        """Runs training iteration over scored rollouts and broadcasts actor weights."""
         if not scored_rollouts:
             raise ValueError("`scored_rollouts` cannot be empty.")
 

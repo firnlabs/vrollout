@@ -1,4 +1,4 @@
-"""Score trajectory rollouts."""
+"""Trajectory evaluation and reward scoring routines."""
 
 import asyncio
 from dataclasses import dataclass
@@ -23,6 +23,7 @@ async def score_rollouts(
     batch_size: int,
     timeout_sec: float = 0.1,
 ) -> list[ScoredRollout]:
+    """Consumes rollouts from queue and scores them using a verifier."""
     scored_rollouts = []
     while not stop_event.is_set() or reward_queue.qsize() > 0:
         batch = await reward_queue.get_batch(batch_size, timeout_sec)

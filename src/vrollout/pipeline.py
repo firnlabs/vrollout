@@ -50,7 +50,11 @@ class RolloutPipeline:
         prompts: Sequence[str],
         sampling_params: types.SamplingParams | None = None,
     ) -> list[scorer.ScoredRollout]:
-        """Generates rollouts and scores them concurrently in a background task."""
+        """Generates rollouts and scores them concurrently via an asynchronous queue.
+
+        Streams chunks of generated rollouts into an `AsyncQueue` consumed by a
+        background scoring worker, returning reward-annotated trajectories.
+        """
         # TODO: check if the prompts list is empty; raise error if it is
         queue = async_queue.AsyncQueue(self._config.queue_maxsize)
         stop_event = asyncio.Event()
@@ -84,7 +88,13 @@ class RolloutPipeline:
         Float[Tensor, "batch completion_len"],
         Float[Tensor, "batch completion_len"],
     ]:
-        """Generates batched rollouts, scores them and computes GAE for each batch."""
+        """Generates reward-scored rollouts and computes GAE advantages.
+
+        Returns a tuple of `(rollout_batch, advantages, target_values)` where:
+            - rollout_batch: Collated batch of rewards, values, dones, and token masks.
+            - advantages: Masked Generalized Advantage Estimation tensor.
+            - target_values: TD(lambda) return targets (`advantages + values`).
+        """
         scored_rollouts = await self.generate_and_score(prompts, sampling_params)
 
         # Collate tensors for GAE computation

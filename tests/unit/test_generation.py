@@ -1,5 +1,3 @@
-"""Tests for generation.py."""
-
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 import itertools
@@ -74,8 +72,6 @@ def weights() -> dict[str, Tensor]:
 
 
 class TestRolloutWorker:
-    """Tests for RolloutWorker class."""
-
     @pytest.mark.asyncio
     async def test_generate_batch(
         self,
@@ -151,8 +147,6 @@ def manager(
 
 
 class TestRolloutManager:
-    """Tests for RolloutManager class."""
-
     @pytest.mark.asyncio
     async def test_generate(
         self,
@@ -198,8 +192,6 @@ class TestRolloutManager:
 
 
 class TestParseVllmOutputToRollout:
-    """Tests for _parse_vllm_output_to_rollout parsing logic."""
-
     @dataclass
     class MockSampleLogprob:
         logprob: float

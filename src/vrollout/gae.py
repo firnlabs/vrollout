@@ -29,7 +29,15 @@ def compute_gae_torch(
     Float[Tensor, "batch completion_len"],
     Float[Tensor, "batch completion_len"],
 ]:
-    """Computes generalized advantage estimation (GAE) using PyTorch primitives."""
+    """Computes Generalized Advantage Estimation (GAE) using PyTorch primitives.
+
+    Follows Schulman et al. (2015), Eq. (11)-(12) with sequence masking.
+
+    Returns a tuple of `(advantages, target_values)` where:
+        - advantages: Advantage estimates masked beyond completion lengths.
+        - target_values: TD(lambda) return targets (`advantages + values`) for critic
+          training.
+    """
     max_seq_len = rewards.shape[-1]
     if max_seq_len == 0:
         raise ValueError("Maximum sequence length is zero.")
@@ -139,7 +147,13 @@ if TRITON_AVAILABLE:
         Float[Tensor, "batch completion_len"],
         Float[Tensor, "batch completion_len"],
     ]:
-        """Computes generalized advantage estimation (GAE) using Triton fused kernel."""
+        """Computes Generalized Advantage Estimation (GAE) using Triton fused kernel.
+
+        Returns a tuple of `(advantages, target_values)` where:
+            - advantages: Advantage estimates computed backward in registers.
+            - target_values: TD(lambda) return targets (`advantages + values`) for
+              critic training.
+        """
         B, T = rewards.shape
         if values.shape != (B, T):
             raise ValueError("Shape mismatch: values must have shape (B, T).")
@@ -193,7 +207,14 @@ else:
         Float[Tensor, "batch completion_len"],
         Float[Tensor, "batch completion_len"],
     ]:
-        """Computes generalized advantage estimation (GAE) using Triton fused kernel."""
+        """Computes Generalized Advantage Estimation (GAE) using Triton fused kernel.
+
+        Returns a tuple of `(advantages, target_values)` where:
+            - advantages: Advantage estimates computed backward in registers.
+            - target_values: TD(lambda) return targets (`advantages + values`) for
+              critic training.
+        """
+        # Note: This serves as a stub when Triton is not available
         raise RuntimeError("Triton is not available in the current environment.")
 
 
@@ -210,7 +231,16 @@ def compute_gae(
     Float[Tensor, "batch completion_len"],
     Float[Tensor, "batch completion_len"],
 ]:
-    """Computes generalized advantage estimation (GAE)."""
+    """Computes Generalized Advantage Estimation (GAE) across variable-length rollouts.
+
+    Uses Triton fused kernel for GAE computation, if available. Otherwise, switches
+    to PyTorch-based GAE computation.
+
+    Returns a tuple of `(advantages, target_values)` where:
+        - advantages: Advantage estimates masked beyond completion lengths.
+        - target_values: TD(lambda) return targets (`advantages + values`)
+          for critic training.
+    """
     if TRITON_AVAILABLE and torch.cuda.is_available():
         return compute_gae_triton(
             rewards, values, next_values, dones, seq_lens, gamma, lam

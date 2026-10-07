@@ -1,5 +1,3 @@
-"""Tests for trainer.py."""
-
 from collections.abc import Sequence
 import functools
 import math
@@ -125,8 +123,6 @@ def _test_train_step_worker(
 
 
 class TestFSDPTrainer:
-    """Tests for FSDPTrainer."""
-
     def test_train_step_local(self, create_batch, actor_model, ref_model):
         _test_train_step_helper(create_batch, actor_model, ref_model)
 

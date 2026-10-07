@@ -1,5 +1,3 @@
-"""Tests for sync.py."""
-
 from collections.abc import Mapping
 import functools
 import os
@@ -118,8 +116,6 @@ def _test_extract_and_broadcast_worker(
 
 
 class TestWeightBroadcaster:
-    """Tests for WeightsBroadcaster class."""
-
     def test_extract_and_broadcast_local(self, model_factory):
         model = model_factory()
         receiver = DummyWeightsReceiver()
