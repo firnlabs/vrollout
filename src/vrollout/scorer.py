@@ -30,13 +30,16 @@ async def score_rollouts(
         if not batch:
             continue
 
-        tasks = [verifier(rollout) for rollout in batch]
-        rewards = await asyncio.gather(*tasks)
+        try:
+            tasks = [verifier(rollout) for rollout in batch]
+            rewards = await asyncio.gather(*tasks)
 
-        for rollout, reward in zip(batch, rewards, strict=True):
-            scored_rollout = ScoredRollout(reward=reward, trajectory=rollout)
-            scored_rollouts.append(scored_rollout)
-
-        reward_queue.task_done(len(batch))
+            for rollout, reward in zip(batch, rewards, strict=True):
+                scored_rollout = ScoredRollout(reward=reward, trajectory=rollout)
+                scored_rollouts.append(scored_rollout)
+        finally:
+            # ensure that tasks are marked done regardless of success or failure to
+            # prevent deadlock
+            reward_queue.task_done(len(batch))
 
     return scored_rollouts
