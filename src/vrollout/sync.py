@@ -36,7 +36,8 @@ class WeightBroadcaster:
         weights = {}
         for n, p in model.named_parameters():
             full_p = p.full_tensor() if isinstance(p, DTensor) else p
-            weights[n] = full_p.detach()
+            if self._rank == 0:
+                weights[n] = full_p.detach()
 
         if self._rank == 0 and self._receivers:
             for r in self._receivers:
