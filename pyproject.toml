@@ -135,6 +135,7 @@ file_line_coverage_min = 80
 name = "cz_conventional_commits"
 tag_format = "v$version"
 version_provider = "pep621"
+update_changelog_on_bump = true
 message_length_limit = 50
 
 arg-type-hints-in-signature = false
