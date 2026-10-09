@@ -5,6 +5,7 @@ import tempfile
 from typing import Callable
 
 import pytest
+import torch
 from torch import distributed as dist
 from torch import multiprocessing as mp
 from torch import nn
@@ -126,14 +127,24 @@ class TestWeightBroadcaster:
         assert len(broadcaster._receivers) > 0
         _assert_param_count_equal(receiver, model)
 
-    def test_extract_and_broadcast_non_zero_rank(self, model_factory):
+    def test_extract_and_broadcast_non_zero_rank(self, model_factory, monkeypatch):
         model = model_factory()
         receiver = DummyWeightsReceiver()
         broadcaster = sync.WeightBroadcaster(rank=1, receivers=[receiver])
+        detach_called = False
+        orig_detach = torch.Tensor.detach
+
+        def spy_detach(self, *args, **kwargs):
+            nonlocal detach_called
+            detach_called = True
+            return orig_detach(self, *args, **kwargs)
+
+        monkeypatch.setattr(torch.Tensor, "detach", spy_detach)
 
         broadcaster.extract_and_broadcast(model)
 
-        assert receiver.weights is None
+        # parameter `detach` should not be called on process rank != 0
+        assert not detach_called
 
     def test_extract_and_broadcast(self, model_factory):
         temp_file = tempfile.NamedTemporaryFile(delete=False)
