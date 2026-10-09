@@ -126,6 +126,15 @@ class TestWeightBroadcaster:
         assert len(broadcaster._receivers) > 0
         _assert_param_count_equal(receiver, model)
 
+    def test_extract_and_broadcast_non_zero_rank(self, model_factory):
+        model = model_factory()
+        receiver = DummyWeightsReceiver()
+        broadcaster = sync.WeightBroadcaster(rank=1, receivers=[receiver])
+
+        broadcaster.extract_and_broadcast(model)
+
+        assert receiver.weights is None
+
     def test_extract_and_broadcast(self, model_factory):
         temp_file = tempfile.NamedTemporaryFile(delete=False)
         world_size = 2
