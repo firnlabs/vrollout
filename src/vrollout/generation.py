@@ -110,7 +110,7 @@ class RolloutWorker:
     async def generate_batch(
         self, prompts: Sequence[str], sampling_params: SamplingParams
     ) -> list[RolloutTrajectory]:
-        """Generates rollout trajectories asynchronouslyfor a batch of prompts."""
+        """Generates rollout trajectories asynchronously for a batch of prompts."""
         tasks = [
             self._generate_single(p, sampling_params, f"request_{i}")
             for i, p in enumerate(prompts)
