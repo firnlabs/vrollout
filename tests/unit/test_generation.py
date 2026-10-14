@@ -138,6 +138,11 @@ class TestRolloutWorker:
 
         assert worker._weights_version == 1
 
+    def test_use_vllm_engine_from_config(self):
+        config = generation.RolloutConfig(model_name="vllm-test-model")
+        worker = generation.RolloutWorker(1, config, llm_engine=None)
+        assert isinstance(worker._llm_engine, generation.AsyncVLLMEngine)
+
 
 @pytest.fixture
 def manager(

@@ -11,8 +11,10 @@ from typing import Any
 from typing import Callable
 from typing import Concatenate
 from typing import ParamSpec
+from unittest.mock import MagicMock
 
 import pytest
+from pytest_mock import MockerFixture
 import ray
 from torch import distributed as dist
 from torch import multiprocessing as mp
@@ -237,3 +239,19 @@ def scored_rollouts(
         )
         scored_rollouts.append(sr)
     return scored_rollouts
+
+
+@pytest.fixture(autouse=True)
+def mock_async_llm_engine(mocker: MockerFixture) -> MagicMock:
+    mock_engine_cls = mocker.patch("vllm.AsyncLLMEngine", autospec=True)
+
+    mock_instance = mock_engine_cls.return_value
+    mock_engine_cls.from_engine_args.return_value = mock_instance
+
+    async def mock_generate(*args, **kwargs):
+        for item in getattr(mock_instance, "mock_outputs", []):
+            yield item
+
+    mock_instance.generate = mock_generate
+
+    return mock_instance

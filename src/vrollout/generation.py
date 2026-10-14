@@ -24,6 +24,7 @@ from vrollout.types import RolloutConfig
 from vrollout.types import RolloutTrajectory
 from vrollout.types import SampleLogprob
 from vrollout.types import SamplingParams
+from vrollout.vllm_engine import AsyncVLLMEngine
 
 
 def _parse_vllm_output_to_rollout(
@@ -42,16 +43,19 @@ def _parse_vllm_output_to_rollout(
         logprobs = [0.0 for _ in range(len(c.token_ids))]
     else:
         for lp_dict, token_id in zip(c.logprobs, c.token_ids, strict=True):
-            assert token_id in lp_dict
-            logprob = lp_dict[token_id]
-            if isinstance(logprob, SampleLogprob):
-                logprob = logprob.logprob
-            logprobs.append(logprob)
+            if lp_dict is None:
+                logprobs.append(0.0)
+            else:
+                assert token_id in lp_dict
+                logprob = lp_dict[token_id]
+                if isinstance(logprob, SampleLogprob):
+                    logprob = logprob.logprob
+                logprobs.append(logprob)
 
     return RolloutTrajectory(
         request_id=r.request_id,
-        prompt=r.prompt,
-        prompt_token_ids=r.prompt_token_ids,
+        prompt=r.prompt or "",
+        prompt_token_ids=r.prompt_token_ids or [],
         completion_token_ids=c.token_ids,
         logprobs=logprobs,
         finish_reason=c.finish_reason or "stop",
@@ -65,7 +69,7 @@ def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
     if config.model_name.startswith("test"):
         return MockAsyncLLMEngine(model_name=config.model_name)
 
-    raise NotImplementedError("To be implemented.")
+    return AsyncVLLMEngine(model_name=config.model_name)
 
 
 @dataclass(frozen=True)
