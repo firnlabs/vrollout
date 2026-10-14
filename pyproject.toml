@@ -3,10 +3,8 @@ name = "vrollout"
 version = "0.1.0"
 description = "Distributed RL rollout engine"
 readme = "README.md"
-authors = [
-    { name = "Carlos Ezequiel", email = "carlos@firnresearch.com" }
-]
-requires-python = ">=3.12"
+authors = [{ name = "Carlos Ezequiel", email = "carlos@firnresearch.com" }]
+requires-python = "~=3.12.0"
 dependencies = [
     "accelerate>=1.14.0",
     "beartype>=0.22.9",
@@ -18,6 +16,16 @@ dependencies = [
     "transformers>=5.15.0",
     "triton>=3.7.1; sys_platform != 'darwin'",
     "vllm>=0.27.1; sys_platform != 'darwin'",
+    "vllm; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "vllm-metal; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[tool.uv.sources]
+vllm = [
+    { url = "https://github.com/vllm-project/vllm/releases/download/v0.31.0/vllm-0.31.0%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
+]
+vllm-metal = [
+    { url = "https://github.com/vllm-project/vllm-metal/releases/download/v0.31.0/vllm_metal-0.31.0-cp312-cp312-macosx_15_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
 ]
 
 [build-system]
@@ -37,11 +45,7 @@ dev = [
     "ruff>=0.15.20",
     "ty>=0.0.58",
 ]
-notebook = [
-    "ipykernel>=7.3.0",
-    "matplotlib>=3.11.0",
-    "tqdm>=4.68.4",
-]
+notebook = ["ipykernel>=7.3.0", "matplotlib>=3.11.0", "tqdm>=4.68.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -75,18 +79,18 @@ extend-include = ["*.ipynb"]
 
 [tool.ruff.lint]
 select = [
-    "E",  # PEP8 errors
-    "W",  # PEP8 warnings
-    "F",  # Pyflakes
-    "I",  # Isort
-    "B",  # flake-bugbear
-    "D",  # pydocstyle rules
+    "E", # PEP8 errors
+    "W", # PEP8 warnings
+    "F", # Pyflakes
+    "I", # Isort
+    "B", # flake-bugbear
+    "D", # pydocstyle rules
 ]
 ignore = [
-    "D1",    # Ignore missing docstrings
-    "D203",  # Conflict with D211
-    "F722",  # Syntax error in forward annotation (jaxtyping shape syntax)
-    "F821",  # Undefined name (jaxtyping dimension literals)
+    "D1",   # Ignore missing docstrings
+    "D203", # Conflict with D211
+    "F722", # Syntax error in forward annotation (jaxtyping shape syntax)
+    "F821", # Undefined name (jaxtyping dimension literals)
 ]
 
 [tool.ruff.lint.pydocstyle]
