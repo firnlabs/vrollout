@@ -1,10 +1,18 @@
 """Pytest commons."""
 
+import os
+
+# Disable Ray's automatic uv runtime_env propagation, which otherwise zips the
+# repository and provisions redundant virtualenvs per worker under `uv run pytest`.
+# This slows down local tests significantly, and is unnecessary given that the workers
+# are running on the same machine.
+# Must be set before `import ray`, as ray._private.ray_constants caches this at import.
+os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+
 import asyncio
 from collections.abc import Awaitable
 from dataclasses import dataclass
 import inspect
-import os
 import random
 import tempfile
 from typing import Any
@@ -241,7 +249,7 @@ def scored_rollouts(
     return scored_rollouts
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_async_llm_engine(mocker: MockerFixture) -> MagicMock:
     mock_engine_cls = mocker.patch("vllm.AsyncLLMEngine", autospec=True)
 
