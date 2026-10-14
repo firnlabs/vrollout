@@ -109,30 +109,3 @@ class TestComputeGAETorch:
         assert torch.allclose(
             target_values[2, :1], advantages[2, :1] + values[2, :1], atol=1e-5
         )
-
-
-class TestComputeGAE:
-    def test_compute_gae_parity_with_torch(self):
-        rewards = torch.tensor(
-            [[1.0, 2.0, 0.0, 0.0], [0.5, 0.5, 0.5, 1.0]], dtype=torch.float32
-        )
-        values = torch.tensor(
-            [[0.5, 1.0, 0.0, 0.0], [0.2, 0.3, 0.4, 0.5]], dtype=torch.float32
-        )
-        next_values = torch.tensor([2.0, 5.0], dtype=torch.float32)
-        dones = torch.tensor(
-            [[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]], dtype=torch.float32
-        )
-        seq_lens = torch.tensor([2, 4], dtype=torch.int64)
-        gamma = 0.99
-        lam = 0.95
-
-        adv_gae, tgt_gae = gae.compute_gae(
-            rewards, values, next_values, dones, seq_lens, gamma=gamma, lam=lam
-        )
-        adv_torch, tgt_torch = gae.compute_gae_torch(
-            rewards, values, next_values, dones, seq_lens, gamma=gamma, lam=lam
-        )
-
-        torch.testing.assert_close(adv_gae, adv_torch)
-        torch.testing.assert_close(tgt_gae, tgt_torch)

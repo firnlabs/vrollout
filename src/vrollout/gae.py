@@ -66,34 +66,5 @@ def compute_gae_torch(
     return advantages, target_values
 
 
-@jaxtyped(typechecker=beartype)
-def compute_gae(
-    rewards: Float[Tensor, "batch completion_len"],
-    values: Float[Tensor, "batch completion_len"],
-    next_values: Float[Tensor, "batch"],
-    dones: Float[Tensor, "batch completion_len"],
-    seq_lens: Int64[Tensor, "batch"],
-    gamma: float = 0.99,
-    lam: float = 0.95,
-) -> tuple[
-    Float[Tensor, "batch completion_len"],
-    Float[Tensor, "batch completion_len"],
-]:
-    """Computes Generalized Advantage Estimation (GAE) across variable-length rollouts.
-
-    Uses PyTorch primitives for advantage and target return computation.
-
-    Returns a tuple of `(advantages, target_values)` where:
-        - advantages: Advantage estimates masked beyond completion lengths.
-        - target_values: TD(lambda) return targets (`advantages + values`)
-          for critic training.
-    """
-    return compute_gae_torch(
-        rewards=rewards,
-        values=values,
-        next_values=next_values,
-        dones=dones,
-        seq_lens=seq_lens,
-        gamma=gamma,
-        lam=lam,
-    )
+# Alias for backwards compatibility and primary public API
+compute_gae = compute_gae_torch
