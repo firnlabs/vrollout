@@ -18,13 +18,6 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-try:
-    from vrollout import triton_smoke_test
-
-    TRITON_AVAILABLE = True
-except ImportError:
-    TRITON_AVAILABLE = False
-
 
 # Known peak memory bandwidth specifications for reference (GB/s)
 KNOWN_GPU_SPECS = {
@@ -160,7 +153,7 @@ def benchmark_hbm_copy(size_mb: int = 512) -> float:
 def benchmark_vector_add_bandwidth(
     n_elements: int = 50_000_000,
 ) -> Dict[str, Any]:
-    """Measure effective memory bandwidth of elementwise vector add (PyTorch vs Triton).
+    """Measure effective memory bandwidth of elementwise vector add (PyTorch).
 
     Formula for vector add (z = x + y):
         Total bytes transferred:
@@ -170,28 +163,15 @@ def benchmark_vector_add_bandwidth(
     x = torch.randn(n_elements, dtype=torch.float32, device="cuda")
     y = torch.randn(n_elements, dtype=torch.float32, device="cuda")
 
-    # 1. PyTorch native baseline
+    # PyTorch native baseline
     torch_ms = benchmark_cuda_event(lambda: torch.add(x, y), warmup=10, reps=30)
     torch_gbs = (total_bytes / (torch_ms * 1e-3)) / 1e9
-
-    # 2. Triton kernel (if available)
-    triton_gbs = None
-    triton_ms = None
-    if TRITON_AVAILABLE:
-        triton_ms = benchmark_cuda_event(
-            lambda: triton_smoke_test.triton_vector_add(x, y, block_size=1024),
-            warmup=10,
-            reps=30,
-        )
-        triton_gbs = (total_bytes / (triton_ms * 1e-3)) / 1e9
 
     return {
         "n_elements": n_elements,
         "size_mb": (n_elements * 4) / (1024 * 1024),
         "torch_ms": torch_ms,
         "torch_gbs": torch_gbs,
-        "triton_ms": triton_ms,
-        "triton_gbs": triton_gbs,
     }
 
 
@@ -296,16 +276,6 @@ def run_full_gpu_benchmark() -> None:
         f"   • PyTorch (torch.add):              {vec['torch_gbs']:>6.2f} GB/s "
         f"(Latency: {vec['torch_ms']:.3f} ms)"
     )
-    if vec["triton_gbs"]:
-        print(
-            "   • OpenAI Triton (vector_add):       "
-            f"{vec['triton_gbs']:>6.2f} GB/s (Latency: {vec['triton_ms']:.3f} ms)"
-        )
-        speedup = vec["torch_ms"] / vec["triton_ms"]
-        print(f"   • Triton Speedup:                   {speedup:>6.2f}x")
-        if ref:
-            triton_eff = (vec["triton_gbs"] / ref["bandwidth_gbs"]) * 100
-            print(f"   • Triton % of Peak Theoretical:     {triton_eff:>6.1f} %")
 
     print("\n5. Compute Throughput Baseline (GEMM 4096 x 4096 x 4096):")
     gemm = benchmark_gemm_compute(4096, 4096, 4096)
