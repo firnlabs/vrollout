@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 from vllm import CompletionOutput
 from vllm import RequestOutput
 from vllm import SamplingParams
@@ -57,3 +58,30 @@ class TestAsyncVLLMEngine:
 
         assert final_output is not None
         assert isinstance(final_output, RequestOutput)
+
+    @pytest.mark.asyncio
+    async def test_update_weights(
+        self,
+        mock_async_llm_engine: MagicMock,
+        async_vllm_engine: AsyncVLLMEngine,
+    ):
+        weights = {"w1": torch.tensor([1.0, 2.0]), "w2": torch.tensor([3.0, 4.0, 5.0])}
+
+        await async_vllm_engine.update_weights(weights)
+
+        mock_async_llm_engine.collective_rpc.assert_awaited_once_with(
+            "reload_weights",
+            kwargs={
+                "weights_iterator": list(weights.items()),
+                "is_checkpoint_format": True,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_weights_error_empty(
+        self, mock_async_llm_engine: MagicMock, async_vllm_engine: AsyncVLLMEngine
+    ):
+        with pytest.raises(ValueError, match="`weights` cannot be empty"):
+            await async_vllm_engine.update_weights({})
+
+        mock_async_llm_engine.collective_rpc.assert_not_awaited()
