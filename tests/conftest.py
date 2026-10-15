@@ -49,6 +49,17 @@ type MultiProcessFn[**P] = Callable[
 ]
 
 
+@pytest.fixture(scope="session", autouse=True)
+def ray_session():
+    """Start Ray once for the entire test session."""
+    ray.init(
+        ignore_reinit_error=True,
+        include_dashboard=False,
+    )
+    yield
+    ray.shutdown()
+
+
 @pytest.fixture
 def model_name() -> str:
     return "test-model"

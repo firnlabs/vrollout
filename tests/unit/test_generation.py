@@ -14,17 +14,6 @@ from vrollout import types
 from vrollout.testing import MockAsyncLLMEngine
 
 
-@pytest.fixture(scope="session", autouse=True)
-def ray_session():
-    """Start Ray once for the entire test session."""
-    ray.init(
-        ignore_reinit_error=True,
-        include_dashboard=False,  # Speed up startup & reduce memory
-    )
-    yield
-    ray.shutdown()
-
-
 @pytest.fixture
 def worker_id() -> int:
     return 1
