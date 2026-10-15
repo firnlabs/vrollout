@@ -1,8 +1,11 @@
 """Implements a thin vLLM wrapper API for distributed rollout."""
 
+from collections.abc import Mapping
 from typing import AsyncIterator
 import uuid
 
+from jaxtyping import Shaped
+from torch import Tensor
 import vllm
 from vllm import RequestOutput
 from vllm import SamplingParams
@@ -32,3 +35,20 @@ class AsyncVLLMEngine:
             prompt, sampling_params, request_id, *args, **kwargs
         )
         return generator
+
+    async def update_weights(
+        self, weights: Mapping[str, Shaped[Tensor, "..."]]
+    ) -> None:
+        if not weights:
+            raise ValueError("`weights` cannot be empty")
+
+        # convert to list since dict_items is not pickleable
+        weights_list = list(weights.items())
+
+        await self._llm_engine.collective_rpc(
+            "reload_weights",
+            kwargs={
+                "weights_iterator": weights_list,
+                "is_checkpoint_format": True,
+            },
+        )
