@@ -14,6 +14,12 @@ from vrollout import types
 from vrollout.testing import MockAsyncLLMEngine
 
 
+@pytest.fixture(autouse=True)
+def _ensure_ray(ray_session):
+    """Ensure Ray is initialized for rollout worker and actor tests."""
+    pass
+
+
 @pytest.fixture
 def worker_id() -> int:
     return 1
@@ -130,7 +136,10 @@ class TestRolloutWorker:
     def test_use_vllm_engine_from_config(self, mock_async_llm_engine):
         config = generation.RolloutConfig(model_name="vllm-test-model")
         worker = generation.RolloutWorker(1, config, llm_engine=None)
-        assert isinstance(worker._llm_engine, generation.AsyncVLLMEngine)
+
+        from vrollout.vllm_engine import AsyncVLLMEngine
+
+        assert isinstance(worker._llm_engine, AsyncVLLMEngine)
 
 
 @pytest.fixture

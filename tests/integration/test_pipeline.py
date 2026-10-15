@@ -11,9 +11,21 @@ import pytest
 import torch
 
 from vrollout import collate
+from vrollout import generation
 from vrollout import pipeline
 from vrollout import scorer
 from vrollout import types
+
+
+@pytest.fixture
+def rollout_manager(ray_session, rollout_config) -> generation.RolloutManager:
+    _ = ray_session  # initialize Ray
+    return generation.RolloutManager(rollout_config)
+
+
+@pytest.fixture
+def rollout_pipeline(rollout_manager, mock_verifier) -> pipeline.RolloutPipeline:
+    return pipeline.RolloutPipeline(rollout_manager, mock_verifier)
 
 
 class TestRolloutPipeline:
