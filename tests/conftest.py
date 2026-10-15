@@ -31,8 +31,6 @@ from torch.distributed import device_mesh
 from torch.distributed import fsdp
 from torch.distributed.device_mesh import DeviceMesh
 
-from vrollout import generation
-from vrollout import pipeline
 from vrollout import types
 from vrollout.scorer import ScoredRollout
 from vrollout.testing import create_model
@@ -49,9 +47,9 @@ type MultiProcessFn[**P] = Callable[
 ]
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def ray_session():
-    """Start Ray once for the entire test session."""
+    """Start Ray once for the test session on demand."""
     ray.init(
         ignore_reinit_error=True,
         include_dashboard=False,
@@ -190,16 +188,6 @@ def prompts(num_prompts) -> list[str]:
 @pytest.fixture
 def rollout_config(model_name: str) -> types.RolloutConfig:
     return types.RolloutConfig(model_name=model_name)
-
-
-@pytest.fixture
-def rollout_manager(rollout_config) -> generation.RolloutManager:
-    return generation.RolloutManager(rollout_config)
-
-
-@pytest.fixture
-def rollout_pipeline(rollout_manager, mock_verifier) -> pipeline.RolloutPipeline:
-    return pipeline.RolloutPipeline(rollout_manager, mock_verifier)
 
 
 @pytest.fixture

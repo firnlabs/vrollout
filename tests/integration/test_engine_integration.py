@@ -49,8 +49,9 @@ def pipeline_config() -> pipeline.PipelineConfig:
 
 @pytest.fixture
 def pipeline_builder(
-    rollout_config, pipeline_config, mock_verifier
+    ray_session, rollout_config, pipeline_config, mock_verifier
 ) -> Callable[[], pipeline.RolloutPipeline]:
+    _ = ray_session  # initialize Ray
     return LazyPipelineBuilder(rollout_config, pipeline_config, mock_verifier)
 
 

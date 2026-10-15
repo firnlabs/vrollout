@@ -24,7 +24,6 @@ from vrollout.types import RolloutConfig
 from vrollout.types import RolloutTrajectory
 from vrollout.types import SampleLogprob
 from vrollout.types import SamplingParams
-from vrollout.vllm_engine import AsyncVLLMEngine
 
 
 def _parse_vllm_output_to_rollout(
@@ -68,6 +67,9 @@ def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
     """Creates a default vLLM AsyncLLMEngine instance from configuration."""
     if config.model_name.startswith("test"):
         return MockAsyncLLMEngine(model_name=config.model_name)
+
+    # lazy load heavy vllm dependency only when needed
+    from vrollout.vllm_engine import AsyncVLLMEngine
 
     return AsyncVLLMEngine(model_name=config.model_name)
 
