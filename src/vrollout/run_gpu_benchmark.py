@@ -8,6 +8,7 @@ This script benchmarks the compute and memory subsystem of the active GPU:
 5. Compute throughput baseline (GEMM FP32 / FP16 / BF16 TFLOPS).
 """
 
+from collections.abc import Callable
 from typing import Any
 from typing import Dict
 
@@ -58,7 +59,9 @@ def get_gpu_capabilities(device_id: int = 0) -> Dict[str, Any]:
     }
 
 
-def benchmark_cuda_event(fn, warmup: int = 10, reps: int = 50) -> float:  # noqa: DOC108
+def benchmark_cuda_event(
+    fn: Callable[[], Any], warmup: int = 10, reps: int = 50
+) -> float:
     """Benchmark a callable GPU function using high-precision CUDA Events.
 
     Args:
