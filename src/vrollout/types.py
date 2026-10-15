@@ -7,6 +7,9 @@ from typing import AsyncIterator
 from typing import Protocol
 from typing import runtime_checkable
 
+from jaxtyping import Shaped
+from torch import Tensor
+
 type Rank = int
 type WorldSize = int
 
@@ -22,6 +25,7 @@ class SamplingParams(Protocol):
     temperature: float
     max_tokens: int
     logprobs: int | None
+    group_size: int = 1
 
 
 @runtime_checkable
@@ -81,6 +85,10 @@ class AsyncLLMEngine(Protocol):
         *args,
         **kwargs,
     ) -> AsyncIterator[RequestOutput]: ...
+
+    async def update_weights(
+        self, weights: Mapping[str, Shaped[Tensor, "..."]]
+    ) -> None: ...
 
 
 @dataclass

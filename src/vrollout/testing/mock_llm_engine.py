@@ -99,54 +99,55 @@ class MockAsyncLLMEngine:
         self, prompt: str, sampling_params: SamplingParams, request_id: str
     ) -> AsyncIterator[RequestOutput]:
         prompt_tokens = self.tokenizer.encode(prompt)
-        curr_tokens = prompt_tokens.copy()
-
-        completion_tokens: list[int] = []
-        logprobs_list: list[dict[int, float]] = []
-        cumulative_logprob = 0.0
-
         max_tokens = min(sampling_params.max_tokens, MIN_COMPLETION_TOKENS)
         temperature = max(sampling_params.temperature, 0.0)
+        group_size = getattr(
+            sampling_params, "group_size", getattr(sampling_params, "n", 1)
+        )
 
-        for step in range(1, max_tokens + 1):
-            # generate new tokens
-            inputs = torch.tensor([curr_tokens], dtype=torch.long)
-            logits = self.model(inputs)
-            next_token_logits = logits[0, -1, :]  # (1, vocab_size)
-            next_token = _sample_next_token(next_token_logits, temperature)
-            logprobs = F.log_softmax(next_token_logits, dim=-1)
-            next_token_logprob = float(logprobs[next_token].item())
+        candidate_outputs: list[CompletionOutput] = []
+        for g in range(group_size):
+            curr_tokens = prompt_tokens.copy()
+            completion_tokens: list[int] = []
+            logprobs_list: list[dict[int, float]] = []
+            cumulative_logprob = 0.0
 
-            # collect token generation data
-            completion_tokens.append(next_token)
-            curr_tokens.append(next_token)
-            logprobs_list.append({next_token: next_token_logprob})
-            cumulative_logprob += next_token_logprob
+            for _ in range(max_tokens):
+                inputs = torch.tensor([curr_tokens], dtype=torch.long)
+                logits = self.model(inputs)
+                next_token_logits = logits[0, -1, :]  # (1, vocab_size)
+                next_token = _sample_next_token(next_token_logits, temperature)
+                logprobs = F.log_softmax(next_token_logits, dim=-1)
+                next_token_logprob = float(logprobs[next_token].item())
 
-            # yield progress to asyncio event loop
+                completion_tokens.append(next_token)
+                curr_tokens.append(next_token)
+                logprobs_list.append({next_token: next_token_logprob})
+                cumulative_logprob += next_token_logprob
+
+            candidate_outputs.append(
+                CompletionOutput(
+                    index=g,
+                    text=self.tokenizer.decode(completion_tokens),
+                    token_ids=completion_tokens,
+                    cumulative_logprob=cumulative_logprob,
+                    logprobs=logprobs_list,
+                    finish_reason="stop",
+                )
+            )
             await asyncio.sleep(0.001)
 
-            # form output
-            is_finished = step == max_tokens
-            yield RequestOutput(
-                request_id=request_id,
-                prompt=prompt,
-                prompt_token_ids=prompt_tokens,
-                outputs=[
-                    CompletionOutput(
-                        index=0,
-                        text=self.tokenizer.decode(completion_tokens),
-                        token_ids=completion_tokens,
-                        cumulative_logprob=cumulative_logprob,
-                        logprobs=logprobs_list,
-                        finish_reason="stop" if is_finished else None,
-                    )
-                ],
-                finished=is_finished,
-            )
+        yield RequestOutput(
+            request_id=request_id,
+            prompt=prompt,
+            prompt_token_ids=prompt_tokens,
+            outputs=candidate_outputs,
+            finished=True,
+        )
 
-    @jaxtyped(typechecker=beartype)
-    def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:
+    async def update_weights(
+        self, weights: Mapping[str, Shaped[Tensor, "..."]]
+    ) -> None:
         assert self.model is not None
         with torch.no_grad():
             self.model.load_state_dict(weights, strict=False)

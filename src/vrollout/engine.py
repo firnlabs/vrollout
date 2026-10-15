@@ -21,7 +21,9 @@ class RLEngineConfig:
     """Configuration for distributed RL training iterations."""
 
     pad_token_id: int = 0
-    beta: float = 0.1
+    beta: float = 0.04
+    clip_eps: float = 0.2
+    group_size: int = 1
     train_steps_per_iteration: int = 1
 
 
@@ -31,6 +33,8 @@ class TrainIterationMetrics:
 
     avg_loss: float
     rank: int
+    avg_kl: float = 0.0
+    avg_clip_fraction: float = 0.0
 
 
 class DistributedRLEngine:
@@ -67,6 +71,7 @@ class DistributedRLEngine:
             reference=self._reference,
             optimizer=self._optimizer,
             beta=self._config.beta,
+            clip_eps=self._config.clip_eps,
         )
 
         self._broadcaster = sync.WeightBroadcaster(
@@ -81,20 +86,40 @@ class DistributedRLEngine:
             raise ValueError("`scored_rollouts` cannot be empty.")
 
         dist_buffer = buffer.DistributedRolloutBuffer(
-            scored_rollouts, pad_token_id=self._config.pad_token_id
+            scored_rollouts,
+            pad_token_id=self._config.pad_token_id,
+            group_size=self._config.group_size,
         )
         local_batch = dist_buffer.get_rank_batch(
             rank=self._rank, world_size=self._world_size, device=device
         )
 
-        losses: list[float] = []
+        metrics_list = []
         for _ in range(self._config.train_steps_per_iteration):
-            loss = self._trainer.train_step(local_batch)
-            losses.append(loss)
+            metrics = self._trainer.train_step(local_batch)
+            metrics_list.append(metrics)
 
         self._broadcaster.extract_and_broadcast(self._actor)
 
+        avg_loss = (
+            sum(m.loss for m in metrics_list) / len(metrics_list)
+            if metrics_list
+            else 0.0
+        )
+        avg_kl = (
+            sum(m.mean_kl for m in metrics_list) / len(metrics_list)
+            if metrics_list
+            else 0.0
+        )
+        avg_clip_fraction = (
+            sum(m.clip_fraction for m in metrics_list) / len(metrics_list)
+            if metrics_list
+            else 0.0
+        )
+
         return TrainIterationMetrics(
-            avg_loss=sum(losses) / len(losses) if losses else 0.0,
+            avg_loss=avg_loss,
             rank=self._rank,
+            avg_kl=avg_kl,
+            avg_clip_fraction=avg_clip_fraction,
         )

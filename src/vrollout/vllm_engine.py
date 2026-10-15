@@ -31,6 +31,17 @@ class AsyncVLLMEngine:
     ) -> AsyncIterator[RequestOutput]:
         request_id = request_id or str(uuid.uuid4())
 
+        if not isinstance(sampling_params, vllm.SamplingParams):
+            group_size = getattr(
+                sampling_params, "group_size", getattr(sampling_params, "n", 1)
+            )
+            sampling_params = vllm.SamplingParams(
+                temperature=sampling_params.temperature,
+                max_tokens=sampling_params.max_tokens,
+                logprobs=sampling_params.logprobs,
+                n=group_size,
+            )
+
         generator = self._llm_engine.generate(
             prompt, sampling_params, request_id, *args, **kwargs
         )

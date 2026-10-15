@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import math
 
 import pytest
 from torch import optim
@@ -45,7 +46,9 @@ class TestDistributedRLEngine:
 
         metrics = dist_engine.train_iteration(scored_rollouts)
 
-        assert metrics.avg_loss > 0.0
+        assert math.isfinite(metrics.avg_loss)
+        assert math.isfinite(metrics.avg_kl)
+        assert 0.0 <= metrics.avg_clip_fraction <= 1.0
         assert metrics.rank == (rank or 0)
         assert dist_engine._world_size == (world_size or 1)
         assert dist_engine._receivers == []

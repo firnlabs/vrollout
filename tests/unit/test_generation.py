@@ -123,13 +123,13 @@ class TestRolloutWorker:
         with pytest.raises(RuntimeError, match="Engine produced no output"):
             await worker._generate_single("prompt", sampling_params, "req_1")
 
-    def test_update_weights(
+    @pytest.mark.asyncio
+    async def test_update_weights(
         self,
         worker: generation.RolloutWorker,
         weights: dict[str, Tensor],
-        mock_llm_engine,
     ):
-        worker.update_weights(weights)
+        await worker.update_weights(weights)
 
         assert worker._weights_version == 1
 
@@ -194,7 +194,7 @@ class TestRolloutManager:
             assert s.weights_version == 1
 
 
-class TestParseVllmOutputToRollout:
+class TestParseVllmOutputToRollouts:
     @dataclass
     class MockSampleLogprob:
         logprob: float
@@ -211,7 +211,7 @@ class TestParseVllmOutputToRollout:
             Sequence[
                 dict[
                     int,
-                    "TestParseVllmOutputToRollout.MockSampleLogprob | float",
+                    "TestParseVllmOutputToRollouts.MockSampleLogprob | float",
                 ]
             ]
             | None
@@ -223,7 +223,7 @@ class TestParseVllmOutputToRollout:
         request_id: str
         prompt: str
         prompt_token_ids: Sequence[int]
-        outputs: Sequence["TestParseVllmOutputToRollout.MockCompletion"]
+        outputs: Sequence["TestParseVllmOutputToRollouts.MockCompletion"]
         finished: bool = True
 
     def test_parse_with_sample_logprob_objects(self):
@@ -242,7 +242,9 @@ class TestParseVllmOutputToRollout:
             outputs=[completion],
         )
 
-        traj = generation._parse_vllm_output_to_rollout(req_out, worker_id=2)
+        trajs = generation._parse_vllm_output_to_rollouts(req_out, worker_id=2)
+        assert len(trajs) == 1
+        traj = trajs[0]
         assert traj.logprobs == [-0.5]
         assert traj.worker_id == 2
         assert traj.text == "hello"
@@ -262,8 +264,9 @@ class TestParseVllmOutputToRollout:
             outputs=[completion],
         )
 
-        traj = generation._parse_vllm_output_to_rollout(req_out, worker_id=0)
-        assert traj.logprobs == [0.0, 0.0]
+        trajs = generation._parse_vllm_output_to_rollouts(req_out, worker_id=0)
+        assert len(trajs) == 1
+        assert trajs[0].logprobs == [0.0, 0.0]
 
     def test_parse_with_empty_outputs_raises_error(self):
         req_out = self.MockRequestOutput(
@@ -273,4 +276,4 @@ class TestParseVllmOutputToRollout:
             outputs=[],
         )
         with pytest.raises(ValueError, match="RequestOutput contains no completion"):
-            generation._parse_vllm_output_to_rollout(req_out, worker_id=0)
+            generation._parse_vllm_output_to_rollouts(req_out, worker_id=0)

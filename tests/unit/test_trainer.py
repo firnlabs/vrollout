@@ -39,13 +39,18 @@ def create_batch(
     loss_mask = torch.zeros_like(input_ids, dtype=torch.bool)
     loss_mask[:, prompt_len:] = True
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    rewards = torch.randint(0, 2, (batch_size,)).float()
+    advantages = rewards - rewards.mean()
+    old_log_probs = torch.zeros((batch_size, max_seq_len - 1), dtype=torch.float32)
 
     return functools.partial(
         DistributedBatch,
         input_ids=input_ids,
         loss_mask=loss_mask,
         attention_mask=attention_mask,
-        rewards=torch.randint(0, 2, (batch_size,)).float(),
+        rewards=rewards,
+        advantages=advantages,
+        old_log_probs=old_log_probs,
     )
 
 
@@ -91,17 +96,21 @@ def _test_train_step_helper(
         assert p.grad is None
 
     init_loss = None
+    metrics = None
     for _ in range(5):
-        loss = trainer.train_step(batch)
+        metrics = trainer.train_step(batch)
         if init_loss is None:
-            init_loss = loss
+            init_loss = metrics.loss
 
     for p in ref_model.parameters():
         assert p.grad is None
 
-    assert math.isfinite(loss)
+    assert metrics is not None
+    assert math.isfinite(metrics.loss)
+    assert math.isfinite(metrics.mean_kl)
+    assert 0.0 <= metrics.clip_fraction <= 1.0
     assert init_loss is not None
-    assert loss < init_loss
+    assert metrics.loss < init_loss
     _assert_params_not_equal(actor_model.named_parameters(), init_actor_params.items())
     _assert_params_equal(ref_model.named_parameters(), init_ref_params.items())
 

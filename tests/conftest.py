@@ -109,6 +109,7 @@ class SamplingParams_:
     temperature: float = 0.7
     max_tokens: int = 32
     logprobs: int = 1
+    group_size: int = 1
 
 
 @pytest.fixture
