@@ -59,6 +59,28 @@ def _create_models(
     return actor, reference
 
 
+def _run_evaluation(
+    rollout_pipeline: pipeline.RolloutPipeline,
+    eval_prompts: list[str],
+    max_tokens: int,
+) -> float:
+    """Runs deterministic greedy evaluation on held-out prompts."""
+    if not eval_prompts:
+        return 0.0
+
+    eval_sampling_params = TrainSamplingParams(
+        temperature=0.0,
+        max_tokens=max_tokens,
+        group_size=1,
+    )
+    scored_eval = asyncio.run(
+        rollout_pipeline.generate_and_score(eval_prompts, eval_sampling_params)
+    )
+    if not scored_eval:
+        return 0.0
+    return sum(sr.reward for sr in scored_eval) / len(scored_eval)
+
+
 @app.command()
 def main(
     model_name: str = typer.Option("test-model", help="Model name or checkpoint path"),
@@ -69,6 +91,12 @@ def main(
     ),
     num_prompts: int = typer.Option(4, help="Number of prompts per iteration"),
     num_iterations: int = typer.Option(3, help="Number of training iterations"),
+    eval_every: int = typer.Option(
+        1, help="Run evaluation every N iterations (0 to disable)"
+    ),
+    num_eval_prompts: int = typer.Option(
+        4, help="Number of held-out prompts for evaluation"
+    ),
     lr: float = typer.Option(1e-5, help="Learning rate for AdamW"),
     beta: float = typer.Option(0.04, help="KL penalty coefficient (beta)"),
     clip_eps: float = typer.Option(0.2, help="Clipping epsilon for policy surrogate"),
@@ -122,6 +150,8 @@ def main(
                     "group_size": group_size,
                     "num_prompts": num_prompts,
                     "num_iterations": num_iterations,
+                    "eval_every": eval_every,
+                    "num_eval_prompts": num_eval_prompts,
                     "lr": lr,
                     "beta": beta,
                     "clip_eps": clip_eps,
@@ -137,6 +167,7 @@ def main(
     # Ray rollout pipeline initialization (rank 0 manages Ray actors)
     rollout_pipeline: pipeline.RolloutPipeline | None = None
     all_prompts: list[str] = []
+    eval_prompts: list[str] = []
 
     if rank == 0:
         import ray
@@ -146,15 +177,27 @@ def main(
             ray.init(ignore_reinit_error=True, include_dashboard=False)
 
         total_prompts_needed = num_prompts * num_iterations
+        run_eval = eval_every > 0 and num_eval_prompts > 0
         if dataset == "gsm8k":
-            data = load_gsm8k_dataset(num_samples=total_prompts_needed)
-            prompt_to_ans = {p: a for p, a in data}
+            data = load_gsm8k_dataset(num_samples=total_prompts_needed, split="train")
+            eval_data = (
+                load_gsm8k_dataset(num_samples=num_eval_prompts, split="test")
+                if run_eval
+                else []
+            )
+            prompt_to_ans = {p: a for p, a in data + eval_data}
             verifier_fn = GSM8KVerifier(prompt_to_ans)
         else:
-            data = load_synthetic_dataset(num_samples=total_prompts_needed)
+            data = load_synthetic_dataset(num_samples=total_prompts_needed, seed=42)
+            eval_data = (
+                load_synthetic_dataset(num_samples=num_eval_prompts, seed=43)
+                if run_eval
+                else []
+            )
             verifier_fn = synthetic_verifier
 
         all_prompts = [p for p, _ in data]
+        eval_prompts = [p for p, _ in eval_data]
 
         rollout_config = types.RolloutConfig(
             model_name=model_name,
@@ -198,9 +241,28 @@ def main(
         "KL Div",
         "Clip Frac",
         "Mean Reward",
+        "Eval Reward",
         "Time (s)",
         title="GRPO training progress",
     )
+
+    # baseline evaluation at iteration 0 (before training updates)
+    if rank == 0 and eval_every > 0 and eval_prompts:
+        assert rollout_pipeline is not None
+        t_eval0 = time.perf_counter()
+        eval_reward0 = _run_evaluation(rollout_pipeline, eval_prompts, max_tokens)
+        eval0_elapsed = time.perf_counter() - t_eval0
+        table.add_row(
+            "0",
+            "-",
+            "-",
+            "-",
+            "-",
+            f"{eval_reward0:.3f}",
+            f"{eval0_elapsed:.2f}s",
+        )
+        if wandb_run:
+            wandb_run.log({"eval_reward_mean": eval_reward0}, step=0)
 
     for it in range(num_iterations):
         t0 = time.perf_counter()
@@ -221,12 +283,20 @@ def main(
 
         # train step on rank local batch & broadcast weights from rank 0
         metrics = dist_engine.train_iteration(scored_rollouts, device=device)
+
+        # periodic evaluation on held-out prompts (rank 0)
+        eval_reward: float | None = None
+        if rank == 0 and eval_every > 0 and (it + 1) % eval_every == 0 and eval_prompts:
+            assert rollout_pipeline is not None
+            eval_reward = _run_evaluation(rollout_pipeline, eval_prompts, max_tokens)
+
         elapsed = time.perf_counter() - t0
 
         # metric reporting on rank 0
         if rank == 0:
             rewards = [sr.reward for sr in scored_rollouts]
             mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
+            eval_reward_str = f"{eval_reward:.3f}" if eval_reward is not None else "-"
 
             table.add_row(
                 str(it + 1),
@@ -234,20 +304,21 @@ def main(
                 f"{metrics.avg_kl:.4f}",
                 f"{metrics.avg_clip_fraction:.2%}",
                 f"{mean_reward:.3f}",
+                eval_reward_str,
                 f"{elapsed:.2f}s",
             )
 
             if wandb_run:
-                wandb_run.log(
-                    {
-                        "loss": metrics.avg_loss,
-                        "kl": metrics.avg_kl,
-                        "clip_fraction": metrics.avg_clip_fraction,
-                        "reward_mean": mean_reward,
-                        "step_time_s": elapsed,
-                    },
-                    step=it + 1,
-                )
+                log_payload: dict[str, float] = {
+                    "loss": metrics.avg_loss,
+                    "kl": metrics.avg_kl,
+                    "clip_fraction": metrics.avg_clip_fraction,
+                    "reward_mean": mean_reward,
+                    "step_time_s": elapsed,
+                }
+                if eval_reward is not None:
+                    log_payload["eval_reward_mean"] = eval_reward
+                wandb_run.log(log_payload, step=it + 1)
 
     if rank == 0:
         console.print(table)
