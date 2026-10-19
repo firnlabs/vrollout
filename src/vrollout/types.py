@@ -96,6 +96,7 @@ class RolloutConfig:
     """Configuration for distributed rollout generation."""
 
     model_name: str = "test-model"
+    backend: str | None = None
     num_workers: int = 2
     gpus_per_worker: float = 0.0  # default 0.0 for local testing
     max_batch_size: int = 64

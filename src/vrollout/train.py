@@ -49,8 +49,13 @@ def _create_models(
     else:
         from transformers import AutoModelForCausalLM  # type: ignore[import-untyped]
 
-        actor = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-        reference = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        actor = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(
+            device
+        )
+        reference = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype
+        ).to(device)
 
     for p in reference.parameters():
         p.requires_grad = False
@@ -104,7 +109,13 @@ def main(
     gpus_per_worker: float = typer.Option(
         0.0, help="GPUs allocated per rollout worker"
     ),
+    gpu_memory_utilization: float = typer.Option(
+        0.4, help="Fraction of GPU memory reserved for vLLM KV cache"
+    ),
     max_tokens: int = typer.Option(32, help="Max completion tokens to generate"),
+    max_seq_len: int = typer.Option(
+        512, help="Maximum total sequence length (prompt + completion) for vLLM"
+    ),
     temperature: float = typer.Option(0.8, help="Sampling temperature"),
     use_wandb: bool = typer.Option(False, "--wandb", help="Enable W&B tracking"),
     wandb_project: str = typer.Option("vrollout", help="W&B project name"),
@@ -201,14 +212,16 @@ def main(
 
         rollout_config = types.RolloutConfig(
             model_name=model_name,
+            backend=backend,
             num_workers=num_rollout_workers,
             gpus_per_worker=gpus_per_worker,
-            # multiply by 2 to account for both prompt and completion tokens
-            max_seq_len=max_tokens * 2,
+            max_seq_len=max(max_seq_len, max_tokens * 2),
+            gpu_memory_utilization=gpu_memory_utilization,
         )
         rollout_manager = generation.RolloutManager(rollout_config)
         rollout_pipeline = pipeline.RolloutPipeline(rollout_manager, verifier_fn)
         receivers = [rollout_manager]
+
     else:
         receivers = []
 

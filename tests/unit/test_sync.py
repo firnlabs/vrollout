@@ -126,6 +126,10 @@ class TestWeightBroadcaster:
 
         assert len(broadcaster._receivers) > 0
         _assert_param_count_equal(receiver, model)
+        assert receiver.weights is not None
+        for t in receiver.weights.values():
+            assert not t.requires_grad
+            assert t.device.type == "cpu"
 
     def test_extract_and_broadcast_non_zero_rank(self, model_factory, monkeypatch):
         model = model_factory()

@@ -133,8 +133,27 @@ class TestRolloutWorker:
 
         assert worker._weights_version == 1
 
-    def test_use_vllm_engine_from_config(self, mock_async_llm_engine):
-        config = generation.RolloutConfig(model_name="vllm-test-model")
+    def test_use_vllm_engine_from_config(self, mocker, mock_async_llm_engine):
+        spy_init = mocker.spy(generation, "_create_llm_engine")
+        config = generation.RolloutConfig(
+            model_name="vllm-test-model",
+            max_seq_len=256,
+            gpu_memory_utilization=0.45,
+        )
+
+        worker = generation.RolloutWorker(1, config, llm_engine=None)
+
+        from vrollout.vllm_engine import AsyncVLLMEngine
+
+        assert isinstance(worker._llm_engine, AsyncVLLMEngine)
+        spy_init.assert_called_once_with(config)
+
+    def test_explicit_vllm_backend_overrides_test_prefix(self, mock_async_llm_engine):
+        config = generation.RolloutConfig(
+            model_name="test-model",
+            backend="vllm",
+        )
+
         worker = generation.RolloutWorker(1, config, llm_engine=None)
 
         from vrollout.vllm_engine import AsyncVLLMEngine
@@ -192,6 +211,29 @@ class TestRolloutManager:
             assert isinstance(s, generation.RolloutWorkerStatus)
             assert s.llm_engine_type == "MockAsyncLLMEngine"
             assert s.weights_version == 1
+
+    def test_gpus_per_worker_forwards_ray_options(self, mocker):
+        mock_options = mocker.patch.object(generation.ActorRolloutWorker, "options")
+        config = types.RolloutConfig(
+            model_name="test-model",
+            num_workers=2,
+            gpus_per_worker=0.5,
+        )
+
+        generation.RolloutManager(config)
+
+        mock_options.assert_called_once_with(num_gpus=0.5)
+        assert mock_options.return_value.remote.call_count == 2
+
+    def test_negative_gpus_per_worker_raises_error(self):
+        config = types.RolloutConfig(
+            model_name="test-model",
+            num_workers=1,
+            gpus_per_worker=-0.5,
+        )
+
+        with pytest.raises(ValueError, match="gpus_per_worker must be non-negative"):
+            generation.RolloutManager(config)
 
 
 class TestParseVllmOutputToRollouts:
