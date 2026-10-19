@@ -1,13 +1,10 @@
 """Distributed LLM rollout generation across Ray actors."""
 
 import asyncio
-from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 import itertools
-from typing import Any
-from typing import cast
 
 from beartype import beartype
 from jaxtyping import jaxtyped
@@ -26,41 +23,49 @@ from vrollout.types import SampleLogprob
 from vrollout.types import SamplingParams
 
 
-def _parse_vllm_output_to_rollout(
+def _parse_vllm_output_to_rollouts(
     request_output: RequestOutput,
     worker_id: int,
-) -> RolloutTrajectory:
-    """Extracts RL training tensors and metadata from a finished vLLM RequestOutput."""
+) -> list[RolloutTrajectory]:
+    """Extracts RL training tensors and metadata for all completions in an output."""
     if not request_output.outputs:
         raise ValueError(
             f"RequestOutput contains no completion outputs: {request_output.request_id}"
         )
     r = request_output
-    c = r.outputs[0]
-    logprobs = []
-    if c.logprobs is None:
-        logprobs = [0.0 for _ in range(len(c.token_ids))]
-    else:
-        for lp_dict, token_id in zip(c.logprobs, c.token_ids, strict=True):
-            if lp_dict is None:
-                logprobs.append(0.0)
-            else:
-                assert token_id in lp_dict
-                logprob = lp_dict[token_id]
-                if isinstance(logprob, SampleLogprob):
-                    logprob = logprob.logprob
-                logprobs.append(logprob)
+    trajectories: list[RolloutTrajectory] = []
+    has_multiple = len(r.outputs) > 1
 
-    return RolloutTrajectory(
-        request_id=r.request_id,
-        prompt=r.prompt or "",
-        prompt_token_ids=r.prompt_token_ids or [],
-        completion_token_ids=c.token_ids,
-        logprobs=logprobs,
-        finish_reason=c.finish_reason or "stop",
-        text=c.text,
-        worker_id=worker_id,
-    )
+    for c in r.outputs:
+        logprobs = []
+        if c.logprobs is None:
+            logprobs = [0.0 for _ in range(len(c.token_ids))]
+        else:
+            for lp_dict, token_id in zip(c.logprobs, c.token_ids, strict=True):
+                if lp_dict is None:
+                    logprobs.append(0.0)
+                else:
+                    assert token_id in lp_dict
+                    logprob = lp_dict[token_id]
+                    if isinstance(logprob, SampleLogprob):
+                        logprob = logprob.logprob
+                    logprobs.append(logprob)
+
+        req_id = f"{r.request_id}_{c.index}" if has_multiple else r.request_id
+        trajectories.append(
+            RolloutTrajectory(
+                request_id=req_id,
+                prompt=r.prompt or "",
+                prompt_token_ids=r.prompt_token_ids or [],
+                completion_token_ids=c.token_ids,
+                logprobs=logprobs,
+                finish_reason=c.finish_reason or "stop",
+                text=c.text,
+                worker_id=worker_id,
+            )
+        )
+
+    return trajectories
 
 
 def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
@@ -101,7 +106,7 @@ class RolloutWorker:
 
     async def _generate_single(
         self, prompt: str, sampling_params: SamplingParams, request_id: str
-    ) -> RolloutTrajectory:
+    ) -> list[RolloutTrajectory]:
         assert self._llm_engine is not None
         generator = self._llm_engine.generate(prompt, sampling_params, request_id)
         final_output = None
@@ -111,7 +116,7 @@ class RolloutWorker:
         if final_output is None:
             raise RuntimeError(f"Engine produced no output for request {request_id}")
 
-        return _parse_vllm_output_to_rollout(final_output, self._worker_id)
+        return _parse_vllm_output_to_rollouts(final_output, self._worker_id)
 
     async def generate_batch(
         self, prompts: Sequence[str], sampling_params: SamplingParams
@@ -121,14 +126,14 @@ class RolloutWorker:
             self._generate_single(p, sampling_params, f"request_{i}")
             for i, p in enumerate(prompts)
         ]
-        return await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
+        return [traj for group in results for traj in group]
 
-    @jaxtyped(typechecker=beartype)
-    def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:
-        """Updates engine weights, bumping weights version."""
-        if self._llm_engine is not None and hasattr(self._llm_engine, "update_weights"):
-            update_fn = cast(Callable[[Any], None], self._llm_engine.update_weights)
-            update_fn(weights)
+    async def update_weights(
+        self, weights: Mapping[str, Shaped[Tensor, "..."]]
+    ) -> None:
+        """Updates engine weights asynchronously, bumping weights version."""
+        await self._llm_engine.update_weights(weights)
         self._weights_version += 1
 
     def get_status(self) -> RolloutWorkerStatus:

@@ -13,7 +13,7 @@ import torch
 from torch import Tensor
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class GRPOLossMetrics:
     loss: float
     mean_kl: float
