@@ -1,6 +1,8 @@
+import os
 from unittest.mock import MagicMock
 
 import pytest
+import safetensors.torch
 import torch
 from vllm import CompletionOutput
 from vllm import RequestOutput
@@ -65,17 +67,37 @@ class TestAsyncVLLMEngine:
         mock_async_llm_engine: MagicMock,
         async_vllm_engine: AsyncVLLMEngine,
     ):
-        weights = {"w1": torch.tensor([1.0, 2.0]), "w2": torch.tensor([3.0, 4.0, 5.0])}
+        shared = torch.tensor([1.0, 2.0])
+        weights = {
+            "w1": shared,
+            "w2": shared,  # tied weight sharing storage with w1
+            "w3": torch.tensor([3.0, 4.0, 5.0]),
+        }
+        observed_loaded: dict[str, torch.Tensor] = {}
+        observed_path: str | None = None
+
+        async def _capture_rpc(method: str, *, kwargs: dict[str, object]):
+            nonlocal observed_loaded, observed_path
+            assert method == "reload_weights"
+            assert kwargs["is_checkpoint_format"] is True
+            weights_path = kwargs["weights_path"]
+            assert isinstance(weights_path, str)
+            observed_path = weights_path
+            st_file = os.path.join(observed_path, "model.safetensors")
+            assert os.path.isfile(st_file)
+            observed_loaded = safetensors.torch.load_file(st_file)
+
+        mock_async_llm_engine.collective_rpc.side_effect = _capture_rpc
 
         await async_vllm_engine.update_weights(weights)
 
-        mock_async_llm_engine.collective_rpc.assert_awaited_once_with(
-            "reload_weights",
-            kwargs={
-                "weights_iterator": list(weights.items()),
-                "is_checkpoint_format": True,
-            },
-        )
+        mock_async_llm_engine.collective_rpc.assert_awaited_once()
+        assert set(observed_loaded.keys()) == {"w1", "w2", "w3"}
+        assert torch.equal(observed_loaded["w1"], shared)
+        assert torch.equal(observed_loaded["w2"], shared)
+        assert torch.equal(observed_loaded["w3"], weights["w3"])
+        assert observed_path is not None
+        assert not os.path.exists(observed_path)
 
     @pytest.mark.asyncio
     async def test_update_weights_error_empty(
