@@ -85,3 +85,21 @@ class TestAsyncVLLMEngine:
             await async_vllm_engine.update_weights({})
 
         mock_async_llm_engine.collective_rpc.assert_not_awaited()
+
+    def test_init_forwards_engine_args(self, mocker):
+        mock_args = mocker.patch("vllm.AsyncEngineArgs")
+        mocker.patch("vllm.AsyncLLMEngine.from_engine_args")
+
+        AsyncVLLMEngine(
+            model_name="Qwen/Qwen2.5-0.5B-Instruct",
+            tensor_parallel_size=2,
+            gpu_memory_utilization=0.4,
+            max_model_len=512,
+        )
+
+        mock_args.assert_called_once_with(
+            model="Qwen/Qwen2.5-0.5B-Instruct",
+            tensor_parallel_size=2,
+            gpu_memory_utilization=0.4,
+            max_model_len=512,
+        )

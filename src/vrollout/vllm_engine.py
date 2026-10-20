@@ -14,10 +14,19 @@ from vllm import SamplingParams
 class AsyncVLLMEngine:
     """Asynchronous vLLM engine for distributed rollout."""
 
-    def __init__(self, model_name: str, tensor_parallel_size: int = 1) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        tensor_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.60,
+        max_model_len: int | None = None,
+    ) -> None:
         self._llm_engine = vllm.AsyncLLMEngine.from_engine_args(
             vllm.AsyncEngineArgs(
-                model=model_name, tensor_parallel_size=tensor_parallel_size
+                model=model_name,
+                tensor_parallel_size=tensor_parallel_size,
+                gpu_memory_utilization=gpu_memory_utilization,
+                max_model_len=max_model_len,
             )
         )
 

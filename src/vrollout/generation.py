@@ -70,13 +70,20 @@ def _parse_vllm_output_to_rollouts(
 
 def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
     """Creates a default vLLM AsyncLLMEngine instance from configuration."""
-    if config.model_name.startswith("test"):
+    is_mock = config.backend == "mock" or (
+        config.backend is None and config.model_name.startswith("test")
+    )
+    if is_mock:
         return MockAsyncLLMEngine(model_name=config.model_name)
 
     # lazy load heavy vllm dependency only when needed
     from vrollout.vllm_engine import AsyncVLLMEngine
 
-    return AsyncVLLMEngine(model_name=config.model_name)
+    return AsyncVLLMEngine(
+        model_name=config.model_name,
+        gpu_memory_utilization=config.gpu_memory_utilization,
+        max_model_len=config.max_seq_len,
+    )
 
 
 @dataclass(frozen=True)
@@ -156,10 +163,20 @@ class RolloutManager:
         self,
         config: RolloutConfig,
     ) -> None:
+        if config.gpus_per_worker < 0:
+            raise ValueError(
+                f"gpus_per_worker must be non-negative, got {config.gpus_per_worker}"
+            )
         self._config = config
+        worker_cls = (
+            ActorRolloutWorker.options(num_gpus=config.gpus_per_worker)
+            if config.gpus_per_worker > 0
+            else ActorRolloutWorker
+        )
         self._workers = [
-            ActorRolloutWorker.remote(i, config) for i in range(config.num_workers)
+            worker_cls.remote(i, config) for i in range(config.num_workers)
         ]
+
         self._worker_cycler = itertools.cycle(self._workers)
 
     async def generate(
