@@ -8,6 +8,7 @@ from vllm import CompletionOutput
 from vllm import RequestOutput
 from vllm import SamplingParams
 from vllm.logprobs import Logprob
+from vllm.sampling_params import RequestOutputKind
 
 from vrollout.vllm_engine import AsyncVLLMEngine
 
@@ -125,3 +126,32 @@ class TestAsyncVLLMEngine:
             gpu_memory_utilization=0.4,
             max_model_len=512,
         )
+
+    @pytest.mark.asyncio
+    async def test_generate_converts_request_output_kind_final_only(
+        self,
+        mock_async_llm_engine: MagicMock,
+        async_vllm_engine: AsyncVLLMEngine,
+    ):
+        class CustomParams:
+            temperature = 0.7
+            max_tokens = 64
+            logprobs = 1
+            group_size = 4
+
+        captured_params: list[SamplingParams] = []
+
+        async def _spy_generate(prompt, params, req_id, *args, **kwargs):
+            captured_params.append(params)
+            # creates an async generator, output is not needed
+            if False:
+                yield  # pragma: no cover
+
+        mock_async_llm_engine.generate = _spy_generate
+        gen = async_vllm_engine.generate("prompt", CustomParams(), "req_1")
+        async for _ in gen:
+            pass
+
+        assert len(captured_params) == 1
+        assert captured_params[0].n == 4
+        assert captured_params[0].output_kind == RequestOutputKind.FINAL_ONLY

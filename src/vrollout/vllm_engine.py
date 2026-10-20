@@ -12,6 +12,7 @@ from torch import Tensor
 import vllm
 from vllm import RequestOutput
 from vllm import SamplingParams
+from vllm.sampling_params import RequestOutputKind
 
 
 class AsyncVLLMEngine:
@@ -52,6 +53,7 @@ class AsyncVLLMEngine:
                 max_tokens=sampling_params.max_tokens,
                 logprobs=sampling_params.logprobs,
                 n=group_size,
+                output_kind=RequestOutputKind.FINAL_ONLY,
             )
 
         generator = self._llm_engine.generate(
