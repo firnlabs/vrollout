@@ -87,7 +87,7 @@ def _run_evaluation(
     return mean_reward, scored_eval
 
 
-def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 160) -> str:
+def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 256) -> str:
     """Formats a scored evaluation rollout cell with reward badge and snippet."""
     if sr is None:
         return "-"
