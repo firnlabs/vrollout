@@ -83,6 +83,7 @@ def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
         model_name=config.model_name,
         gpu_memory_utilization=config.gpu_memory_utilization,
         max_model_len=config.max_seq_len,
+        enforce_eager=config.enforce_eager,
     )
 
 

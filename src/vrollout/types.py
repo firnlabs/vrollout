@@ -102,6 +102,7 @@ class RolloutConfig:
     max_batch_size: int = 64
     max_seq_len: int = 512
     gpu_memory_utilization: float = 0.60
+    enforce_eager: bool = True
 
 
 @dataclass(frozen=True, slots=True)
