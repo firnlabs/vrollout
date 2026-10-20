@@ -51,7 +51,11 @@ def _create_models(
     else:
         from transformers import AutoModelForCausalLM  # type: ignore[import-untyped]
 
-        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        dtype = (
+            torch.bfloat16
+            if (device.type == "cuda" and torch.cuda.is_bf16_supported())
+            else (torch.float16 if device.type == "cuda" else torch.float32)
+        )
         actor = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype).to(device)
         reference = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype).to(
             device
@@ -200,22 +204,26 @@ def main(
 
     eval_completion_len = eval_max_tokens if eval_max_tokens is not None else max_tokens
 
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        device = torch.device(f"cuda:{local_rank}")
+    else:
+        device = torch.device("cpu")
+
     # initialize distributed environment
     if not dist.is_initialized():
         backend_dist = "nccl" if torch.cuda.is_available() else "gloo"
-        dist.init_process_group(backend=backend_dist)
+        dist.init_process_group(
+            backend=backend_dist,
+            device_id=device if torch.cuda.is_available() else None,
+        )
 
     # prevent Ray and vLLM child processes from inheriting torchelastic agent store
     os.environ["TORCHELASTIC_USE_AGENT_STORE"] = "False"
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-
-    device = (
-        torch.device(f"cuda:{rank}")
-        if torch.cuda.is_available()
-        else torch.device("cpu")
-    )
 
     if rank == 0:
         console.rule("[bold cyan]vRollout Distributed GRPO Trainer[/bold cyan]")
@@ -385,7 +393,7 @@ def main(
             container[0] = scored
 
         # broadcast scored rollouts to all ranks
-        dist.broadcast_object_list(container, src=0)
+        dist.broadcast_object_list(container, src=0, device=device)
         scored_rollouts = container[0]
 
         # train step on rank local batch & broadcast weights from rank 0
