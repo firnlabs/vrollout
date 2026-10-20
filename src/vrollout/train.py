@@ -91,7 +91,11 @@ def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 160) -> 
     """Formats a scored evaluation rollout cell with reward badge and snippet."""
     if sr is None:
         return "-"
-    badge = "[green]✓ (1.0)[/green]" if sr.reward >= 0.5 else "[red]✗ (0.0)[/red]"
+    badge = (
+        f"[green]✓ ({sr.reward:.1f})[/green]"
+        if sr.reward >= 0.5
+        else f"[red]✗ ({sr.reward:.1f})[/red]"
+    )
     pred = extract_numerical_answer(sr.trajectory.text) or "N/A"
     text = sr.trajectory.text.strip().replace("\n", " ")
     if len(text) > max_chars:
@@ -118,7 +122,16 @@ def _build_qualitative_table(
     base_by_prompt = {sr.trajectory.prompt: sr for sr in baseline_eval}
     final_by_prompt = {sr.trajectory.prompt: sr for sr in final_eval}
 
-    for prompt in eval_prompts[:max_samples]:
+    def _sort_key(prompt: str) -> tuple[bool, float]:
+        base_sr = base_by_prompt.get(prompt)
+        final_sr = final_by_prompt.get(prompt)
+        base_r = base_sr.reward if base_sr is not None else 0.0
+        final_r = final_sr.reward if final_sr is not None else 0.0
+        return (final_r > base_r, abs(final_r - base_r))
+
+    sorted_prompts = sorted(eval_prompts, key=_sort_key, reverse=True)
+
+    for prompt in sorted_prompts[:max_samples]:
         gt_raw = prompt_to_ans.get(prompt, "")
         gt_ans = extract_numerical_answer(gt_raw) or gt_raw
         sample_table.add_row(
