@@ -141,14 +141,26 @@ def test_build_qualitative_table_custom_max_chars() -> None:
 
 
 def test_cli_eval_completion_flags_registered() -> None:
-    """Test that eval completion length CLI flags are present in train help."""
+    """Test that eval completion length CLI flags are registered in train app."""
+    import typer
+
+    click_cmd = typer.main.get_command(train.app)
+    opts = {opt for p in click_cmd.params for opt in p.opts}
+
+    assert "--eval-max-tokens" in opts
+    assert "--eval-completion-length" in opts
+    assert "--eval-max-chars" in opts
+
+
+def test_cli_eval_completion_flags_accepted() -> None:
+    """Test that eval completion flags are accepted without parse error."""
     from typer.testing import CliRunner
 
-    runner = CliRunner(env={"COLUMNS": "200"})
+    runner = CliRunner()
 
-    result = runner.invoke(train.app, ["--help"])
+    result = runner.invoke(
+        train.app,
+        ["--eval-completion-length", "64", "--eval-max-chars", "128", "--help"],
+    )
 
     assert result.exit_code == 0
-    assert "--eval-max-tokens" in result.output
-    assert "--eval-completion-length" in result.output
-    assert "--eval-max-chars" in result.output
