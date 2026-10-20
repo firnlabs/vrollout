@@ -118,6 +118,7 @@ class TestAsyncVLLMEngine:
             tensor_parallel_size=2,
             gpu_memory_utilization=0.4,
             max_model_len=512,
+            enforce_eager=False,
         )
 
         mock_args.assert_called_once_with(
@@ -125,6 +126,28 @@ class TestAsyncVLLMEngine:
             tensor_parallel_size=2,
             gpu_memory_utilization=0.4,
             max_model_len=512,
+            enforce_eager=False,
+            distributed_executor_backend="mp",
+        )
+
+    def test_init_defaults_uniproc_and_eager_for_single_gpu(self, mocker):
+        mock_args = mocker.patch("vllm.AsyncEngineArgs")
+        mocker.patch("vllm.AsyncLLMEngine.from_engine_args")
+
+        AsyncVLLMEngine(
+            model_name="Qwen/Qwen2.5-0.5B-Instruct",
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.4,
+            max_model_len=512,
+        )
+
+        mock_args.assert_called_once_with(
+            model="Qwen/Qwen2.5-0.5B-Instruct",
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.4,
+            max_model_len=512,
+            enforce_eager=True,
+            distributed_executor_backend="uni",
         )
 
     @pytest.mark.asyncio

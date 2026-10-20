@@ -177,6 +177,9 @@ def main(
         512, help="Maximum total sequence length (prompt + completion) for vLLM"
     ),
     temperature: float = typer.Option(0.8, help="Sampling temperature"),
+    enforce_eager: bool = typer.Option(
+        True, help="Disable CUDA graph capture and Inductor compilation in vLLM"
+    ),
     use_wandb: bool = typer.Option(False, "--wandb", help="Enable W&B tracking"),
     wandb_project: str = typer.Option("vrollout", help="W&B project name"),
 ) -> None:
@@ -187,6 +190,9 @@ def main(
     if not dist.is_initialized():
         backend_dist = "nccl" if torch.cuda.is_available() else "gloo"
         dist.init_process_group(backend=backend_dist)
+
+    # prevent Ray and vLLM child processes from inheriting torchelastic agent store
+    os.environ["TORCHELASTIC_USE_AGENT_STORE"] = "False"
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -282,6 +288,7 @@ def main(
             gpus_per_worker=gpus_per_worker,
             max_seq_len=max(max_seq_len, max_tokens * 2),
             gpu_memory_utilization=gpu_memory_utilization,
+            enforce_eager=enforce_eager,
         )
         rollout_manager = generation.RolloutManager(rollout_config)
         rollout_pipeline = pipeline.RolloutPipeline(rollout_manager, verifier_fn)
