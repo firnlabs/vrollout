@@ -1,10 +1,13 @@
 """Implements a thin vLLM wrapper API for distributed rollout."""
 
 from collections.abc import Mapping
+import os
+import tempfile
 from typing import AsyncIterator
 import uuid
 
 from jaxtyping import Shaped
+import safetensors.torch
 from torch import Tensor
 import vllm
 from vllm import RequestOutput
@@ -62,13 +65,30 @@ class AsyncVLLMEngine:
         if not weights:
             raise ValueError("`weights` cannot be empty")
 
-        # convert to list since dict_items is not pickleable
-        weights_list = list(weights.items())
+        # stage safetensors in shared memory (/dev/shm) because vLLM V1's untyped
+        # ZMQ MsgpackDecoder decodes raw torch.Tensor RPC arguments as plain lists.
+        shm_dir = "/dev/shm" if os.path.isdir("/dev/shm") else None
+        with tempfile.TemporaryDirectory(
+            prefix="vrollout_weights_", dir=shm_dir
+        ) as tmp_dir:
+            seen_ptrs: set[int] = set()
+            tensors: dict[str, Tensor] = {}
+            for name, tensor in weights.items():
+                t = tensor.detach().cpu().contiguous()
+                # ensure each tensor has a unique data pointer to avoid aliasing issues
+                # this can happen when weights share the same memory
+                if t.data_ptr() in seen_ptrs:
+                    t = t.clone()
+                seen_ptrs.add(t.data_ptr())
+                tensors[name] = t
 
-        await self._llm_engine.collective_rpc(
-            "reload_weights",
-            kwargs={
-                "weights_iterator": weights_list,
-                "is_checkpoint_format": True,
-            },
-        )
+            safetensors.torch.save_file(
+                tensors, os.path.join(tmp_dir, "model.safetensors")
+            )
+            await self._llm_engine.collective_rpc(
+                "reload_weights",
+                kwargs={
+                    "weights_path": tmp_dir,
+                    "is_checkpoint_format": True,
+                },
+            )

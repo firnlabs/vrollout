@@ -50,12 +50,10 @@ def _create_models(
         from transformers import AutoModelForCausalLM  # type: ignore[import-untyped]
 
         dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-        actor = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(
+        actor = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype).to(device)
+        reference = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype).to(
             device
         )
-        reference = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype
-        ).to(device)
 
     for p in reference.parameters():
         p.requires_grad = False
