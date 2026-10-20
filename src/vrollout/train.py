@@ -19,12 +19,14 @@ import typer
 
 from vrollout import generation
 from vrollout import pipeline
+from vrollout import scorer
 from vrollout import types
 from vrollout.datasets import load_gsm8k_dataset
 from vrollout.datasets import load_synthetic_dataset
 from vrollout.engine import DistributedRLEngine
 from vrollout.engine import RLEngineConfig
 from vrollout.testing import models
+from vrollout.verifiers import extract_numerical_answer
 from vrollout.verifiers import GSM8KVerifier
 from vrollout.verifiers import synthetic_verifier
 
@@ -66,10 +68,10 @@ def _run_evaluation(
     rollout_pipeline: pipeline.RolloutPipeline,
     eval_prompts: list[str],
     max_tokens: int,
-) -> float:
+) -> tuple[float, list[scorer.ScoredRollout]]:
     """Runs deterministic greedy evaluation on held-out prompts."""
     if not eval_prompts:
-        return 0.0
+        return 0.0, []
 
     eval_sampling_params = TrainSamplingParams(
         temperature=0.0,
@@ -80,8 +82,65 @@ def _run_evaluation(
         rollout_pipeline.generate_and_score(eval_prompts, eval_sampling_params)
     )
     if not scored_eval:
-        return 0.0
-    return sum(sr.reward for sr in scored_eval) / len(scored_eval)
+        return 0.0, []
+    mean_reward = sum(sr.reward for sr in scored_eval) / len(scored_eval)
+    return mean_reward, scored_eval
+
+
+def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 256) -> str:
+    """Formats a scored evaluation rollout cell with reward badge and snippet."""
+    if sr is None:
+        return "-"
+    badge = (
+        f"[green]✓ ({sr.reward:.1f})[/green]"
+        if sr.reward >= 0.5
+        else f"[red]✗ ({sr.reward:.1f})[/red]"
+    )
+    pred = extract_numerical_answer(sr.trajectory.text) or "N/A"
+    text = sr.trajectory.text.strip().replace("\n", " ")
+    if len(text) > max_chars:
+        text = text[: max_chars - 3] + "..."
+    return f"{badge} [dim](pred: {pred})[/dim]\n{text}"
+
+
+def _build_qualitative_table(
+    eval_prompts: list[str],
+    prompt_to_ans: dict[str, str],
+    baseline_eval: list[scorer.ScoredRollout],
+    final_eval: list[scorer.ScoredRollout],
+    max_samples: int = 3,
+) -> Table:
+    """Builds a side-by-side table comparing baseline and final eval completions."""
+    sample_table = Table(
+        "Prompt",
+        "Ground Truth",
+        "Before (Iter 0)",
+        "After (Final)",
+        title="Qualitative evaluation samples (Before vs. After)",
+        show_lines=True,
+    )
+    base_by_prompt = {sr.trajectory.prompt: sr for sr in baseline_eval}
+    final_by_prompt = {sr.trajectory.prompt: sr for sr in final_eval}
+
+    def _sort_key(prompt: str) -> tuple[bool, float]:
+        base_sr = base_by_prompt.get(prompt)
+        final_sr = final_by_prompt.get(prompt)
+        base_r = base_sr.reward if base_sr is not None else 0.0
+        final_r = final_sr.reward if final_sr is not None else 0.0
+        return (final_r > base_r, abs(final_r - base_r))
+
+    sorted_prompts = sorted(eval_prompts, key=_sort_key, reverse=True)
+
+    for prompt in sorted_prompts[:max_samples]:
+        gt_raw = prompt_to_ans.get(prompt, "")
+        gt_ans = extract_numerical_answer(gt_raw) or gt_raw
+        sample_table.add_row(
+            prompt,
+            str(gt_ans),
+            _format_eval_cell(base_by_prompt.get(prompt)),
+            _format_eval_cell(final_by_prompt.get(prompt)),
+        )
+    return sample_table
 
 
 @app.command()
@@ -99,6 +158,9 @@ def main(
     ),
     num_eval_prompts: int = typer.Option(
         4, help="Number of held-out prompts for evaluation"
+    ),
+    num_qualitative_samples: int = typer.Option(
+        3, help="Number of held-out eval completions to display (0 to disable)"
     ),
     lr: float = typer.Option(1e-5, help="Learning rate for AdamW"),
     beta: float = typer.Option(0.04, help="KL penalty coefficient (beta)"),
@@ -177,6 +239,7 @@ def main(
     rollout_pipeline: pipeline.RolloutPipeline | None = None
     all_prompts: list[str] = []
     eval_prompts: list[str] = []
+    prompt_to_ans: dict[str, str] = {}
 
     if rank == 0:
         import ray
@@ -194,8 +257,6 @@ def main(
                 if run_eval
                 else []
             )
-            prompt_to_ans = {p: a for p, a in data + eval_data}
-            verifier_fn = GSM8KVerifier(prompt_to_ans)
         else:
             data = load_synthetic_dataset(num_samples=total_prompts_needed, seed=42)
             eval_data = (
@@ -203,7 +264,13 @@ def main(
                 if run_eval
                 else []
             )
-            verifier_fn = synthetic_verifier
+
+        prompt_to_ans = {p: a for p, a in data + eval_data}
+        verifier_fn = (
+            synthetic_verifier
+            if dataset == "synthetic" and backend == "mock"
+            else GSM8KVerifier(prompt_to_ans)
+        )
 
         all_prompts = [p for p, _ in data]
         eval_prompts = [p for p, _ in eval_data]
@@ -257,11 +324,17 @@ def main(
         title="GRPO training progress",
     )
 
+    baseline_eval_rollouts: list[scorer.ScoredRollout] = []
+    final_eval_rollouts: list[scorer.ScoredRollout] = []
+
     # baseline evaluation at iteration 0 (before training updates)
     if rank == 0 and eval_every > 0 and eval_prompts:
         assert rollout_pipeline is not None
         t_eval0 = time.perf_counter()
-        eval_reward0 = _run_evaluation(rollout_pipeline, eval_prompts, max_tokens)
+        eval_reward0, baseline_eval_rollouts = _run_evaluation(
+            rollout_pipeline, eval_prompts, max_tokens
+        )
+        final_eval_rollouts = baseline_eval_rollouts
         eval0_elapsed = time.perf_counter() - t_eval0
         table.add_row(
             "0",
@@ -299,7 +372,9 @@ def main(
         eval_reward: float | None = None
         if rank == 0 and eval_every > 0 and (it + 1) % eval_every == 0 and eval_prompts:
             assert rollout_pipeline is not None
-            eval_reward = _run_evaluation(rollout_pipeline, eval_prompts, max_tokens)
+            eval_reward, final_eval_rollouts = _run_evaluation(
+                rollout_pipeline, eval_prompts, max_tokens
+            )
 
         elapsed = time.perf_counter() - t0
 
@@ -333,6 +408,15 @@ def main(
 
     if rank == 0:
         console.print(table)
+        if eval_every > 0 and eval_prompts and num_qualitative_samples > 0:
+            qualitative_table = _build_qualitative_table(
+                eval_prompts=eval_prompts,
+                prompt_to_ans=prompt_to_ans,
+                baseline_eval=baseline_eval_rollouts,
+                final_eval=final_eval_rollouts,
+                max_samples=num_qualitative_samples,
+            )
+            console.print(qualitative_table)
         if wandb_run:
             wandb_run.finish()
 
