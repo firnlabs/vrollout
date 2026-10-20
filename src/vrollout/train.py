@@ -98,8 +98,8 @@ def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 256) -> 
     )
     pred = extract_numerical_answer(sr.trajectory.text) or "N/A"
     text = sr.trajectory.text.strip().replace("\n", " ")
-    if max_chars > 0 and len(text) > max_chars:
-        text = text[: max_chars - 3] + "..."
+    if max_chars > 3 and len(text) > max_chars:
+        text = f"...{text[-(max_chars - 3) :]}"
     return f"{badge} [dim](pred: {pred})[/dim]\n{text}"
 
 

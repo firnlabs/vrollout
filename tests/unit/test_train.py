@@ -51,6 +51,19 @@ def test_format_eval_cell_failure_truncation() -> None:
     assert "..." in formatted
 
 
+def test_format_eval_cell_tail_truncation() -> None:
+    """Test that long completions preserve the tail ending with answer."""
+    text = "beginning steps that are long and repetitive. The answer is #### 42"
+    sr = _make_scored_rollout("What is the answer?", text, 1.0)
+
+    formatted = train._format_eval_cell(sr, max_chars=35)
+
+    assert "[green]✓ (1.0)[/green]" in formatted
+    assert "(pred: 42)" in formatted
+    assert formatted.endswith("The answer is #### 42")
+    assert "..." in formatted
+
+
 def test_build_qualitative_table_prioritizes_improved_prompts() -> None:
     """Test that prompts with reward improvement (0.0 -> 1.0) are sorted first."""
     prompts = ["p_easy", "p_hard", "p_improved"]
