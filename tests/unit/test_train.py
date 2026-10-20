@@ -103,3 +103,52 @@ def test_build_qualitative_table_preserves_order_when_rewards_equal() -> None:
 
     assert len(table.rows) == 3
     assert table.columns[0]._cells == ["p1", "p2", "p3"]
+
+
+def test_format_eval_cell_zero_max_chars_disables_truncation() -> None:
+    """Test that max_chars=0 disables text truncation for long strings."""
+    long_text = "step " * 100
+    sr = _make_scored_rollout("What is 2+2?", long_text, 1.0)
+
+    formatted = train._format_eval_cell(sr, max_chars=0)
+
+    assert "[green]✓ (1.0)[/green]" in formatted
+    assert "..." not in formatted
+    assert long_text.strip() in formatted
+
+
+def test_build_qualitative_table_custom_max_chars() -> None:
+    """Test that build_qualitative_table respects custom max_chars per cell."""
+    long_text = "explanation " * 20
+    prompts = ["p1"]
+    gt_map = {"p1": "42"}
+    baseline_eval = [_make_scored_rollout("p1", long_text, 0.0)]
+    final_eval = [_make_scored_rollout("p1", long_text, 1.0)]
+
+    table = train._build_qualitative_table(
+        eval_prompts=prompts,
+        prompt_to_ans=gt_map,
+        baseline_eval=baseline_eval,
+        final_eval=final_eval,
+        max_samples=1,
+        max_chars=40,
+    )
+
+    cell_before = str(table.columns[2]._cells[0])
+    cell_after = str(table.columns[3]._cells[0])
+    assert "..." in cell_before
+    assert "..." in cell_after
+
+
+def test_cli_eval_completion_flags_registered() -> None:
+    """Test that eval completion length CLI flags are present in train help."""
+    from typer.testing import CliRunner
+
+    runner = CliRunner(env={"COLUMNS": "200"})
+
+    result = runner.invoke(train.app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--eval-max-tokens" in result.output
+    assert "--eval-completion-length" in result.output
+    assert "--eval-max-chars" in result.output

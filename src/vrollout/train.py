@@ -98,7 +98,7 @@ def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 256) -> 
     )
     pred = extract_numerical_answer(sr.trajectory.text) or "N/A"
     text = sr.trajectory.text.strip().replace("\n", " ")
-    if len(text) > max_chars:
+    if max_chars > 0 and len(text) > max_chars:
         text = text[: max_chars - 3] + "..."
     return f"{badge} [dim](pred: {pred})[/dim]\n{text}"
 
@@ -109,6 +109,7 @@ def _build_qualitative_table(
     baseline_eval: list[scorer.ScoredRollout],
     final_eval: list[scorer.ScoredRollout],
     max_samples: int = 3,
+    max_chars: int = 256,
 ) -> Table:
     """Builds a side-by-side table comparing baseline and final eval completions."""
     sample_table = Table(
@@ -137,8 +138,8 @@ def _build_qualitative_table(
         sample_table.add_row(
             prompt,
             str(gt_ans),
-            _format_eval_cell(base_by_prompt.get(prompt)),
-            _format_eval_cell(final_by_prompt.get(prompt)),
+            _format_eval_cell(base_by_prompt.get(prompt), max_chars=max_chars),
+            _format_eval_cell(final_by_prompt.get(prompt), max_chars=max_chars),
         )
     return sample_table
 
@@ -173,6 +174,17 @@ def main(
         0.4, help="Fraction of GPU memory reserved for vLLM KV cache"
     ),
     max_tokens: int = typer.Option(32, help="Max completion tokens to generate"),
+    eval_max_tokens: int | None = typer.Option(
+        None,
+        "--eval-max-tokens",
+        "--eval-completion-length",
+        help="Max completion tokens for evaluation (defaults to max_tokens)",
+    ),
+    eval_max_chars: int = typer.Option(
+        256,
+        "--eval-max-chars",
+        help="Max chars per eval cell in qualitative table (0 for no limit)",
+    ),
     max_seq_len: int = typer.Option(
         512, help="Maximum total sequence length (prompt + completion) for vLLM"
     ),
@@ -182,6 +194,8 @@ def main(
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
     console = Console()
+
+    eval_completion_len = eval_max_tokens if eval_max_tokens is not None else max_tokens
 
     # initialize distributed environment
     if not dist.is_initialized():
@@ -223,6 +237,7 @@ def main(
                     "num_iterations": num_iterations,
                     "eval_every": eval_every,
                     "num_eval_prompts": num_eval_prompts,
+                    "eval_max_tokens": eval_completion_len,
                     "lr": lr,
                     "beta": beta,
                     "clip_eps": clip_eps,
@@ -275,12 +290,13 @@ def main(
         all_prompts = [p for p, _ in data]
         eval_prompts = [p for p, _ in eval_data]
 
+        effective_max_tokens = max(max_tokens, eval_completion_len)
         rollout_config = types.RolloutConfig(
             model_name=model_name,
             backend=backend,
             num_workers=num_rollout_workers,
             gpus_per_worker=gpus_per_worker,
-            max_seq_len=max(max_seq_len, max_tokens * 2),
+            max_seq_len=max(max_seq_len, effective_max_tokens * 2),
             gpu_memory_utilization=gpu_memory_utilization,
         )
         rollout_manager = generation.RolloutManager(rollout_config)
@@ -332,7 +348,7 @@ def main(
         assert rollout_pipeline is not None
         t_eval0 = time.perf_counter()
         eval_reward0, baseline_eval_rollouts = _run_evaluation(
-            rollout_pipeline, eval_prompts, max_tokens
+            rollout_pipeline, eval_prompts, eval_completion_len
         )
         final_eval_rollouts = baseline_eval_rollouts
         eval0_elapsed = time.perf_counter() - t_eval0
@@ -373,7 +389,7 @@ def main(
         if rank == 0 and eval_every > 0 and (it + 1) % eval_every == 0 and eval_prompts:
             assert rollout_pipeline is not None
             eval_reward, final_eval_rollouts = _run_evaluation(
-                rollout_pipeline, eval_prompts, max_tokens
+                rollout_pipeline, eval_prompts, eval_completion_len
             )
 
         elapsed = time.perf_counter() - t0
@@ -415,6 +431,7 @@ def main(
                 baseline_eval=baseline_eval_rollouts,
                 final_eval=final_eval_rollouts,
                 max_samples=num_qualitative_samples,
+                max_chars=eval_max_chars,
             )
             console.print(qualitative_table)
         if wandb_run:
