@@ -242,7 +242,7 @@ def _run_profiling(
         activities=activities,
         record_shapes=True,
         profile_memory=True,
-        with_stack=True,
+        with_stack=False,
     ) as prof:
         for _ in range(cfg.profiled_steps):
             t0 = time.perf_counter()
