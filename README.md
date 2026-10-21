@@ -41,6 +41,7 @@ uv sync
 The following benchmark script profiles PyTorch FSDP2 model sharding, distributed training iterations, and parameter weight broadcasting across ranks (tested on CPU via `gloo` and GPU via `nccl`).
 
 ```bash
+# Optional: set UV_LINK_MODE=copy if your environment uses mounted scratch volumes (e.g. Kaggle)
 uv run torchrun --standalone --nproc_per_node=2 --local-addr 127.0.0.1 \
   benchmarks/run_engine_benchmark.py
 ```
