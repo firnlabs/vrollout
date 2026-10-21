@@ -1,5 +1,10 @@
 """Unit tests for train CLI qualitative table and evaluation rendering."""
 
+from unittest.mock import MagicMock
+
+import pytest
+import torch
+
 from vrollout import scorer
 from vrollout import train
 from vrollout import types
@@ -177,3 +182,37 @@ def test_cli_eval_completion_flags_accepted() -> None:
     )
 
     assert result.exit_code == 0
+
+
+def test_create_models_falls_back_to_fp16_when_bf16_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_device = torch.device("cuda:0")
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: False)
+    mock_from_pretrained = MagicMock()
+    monkeypatch.setattr(
+        "transformers.AutoModelForCausalLM.from_pretrained", mock_from_pretrained
+    )
+
+    train._create_models("test-model", backend="vllm", device=fake_device)
+
+    assert mock_from_pretrained.call_count == 2
+    for call in mock_from_pretrained.call_args_list:
+        assert call.kwargs["dtype"] == torch.float16
+
+
+def test_create_models_uses_bf16_when_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_device = torch.device("cuda:0")
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+    mock_from_pretrained = MagicMock()
+    monkeypatch.setattr(
+        "transformers.AutoModelForCausalLM.from_pretrained", mock_from_pretrained
+    )
+
+    train._create_models("test-model", backend="vllm", device=fake_device)
+
+    assert mock_from_pretrained.call_count == 2
+    for call in mock_from_pretrained.call_args_list:
+        assert call.kwargs["dtype"] == torch.bfloat16
