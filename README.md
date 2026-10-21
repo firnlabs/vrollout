@@ -46,6 +46,12 @@ uv run torchrun --standalone --nproc_per_node=2 --local-addr 127.0.0.1 \
   benchmarks/run_engine_benchmark.py
 ```
 
+To view all benchmark configuration options (such as `--with-stack`, `--warmup-steps`, and `--trace-dir`):
+
+```bash
+uv run python benchmarks/run_engine_benchmark.py --help
+```
+
 ---
 
 ## Directory structure
