@@ -98,20 +98,65 @@ class BenchmarkReport:
     peak_vram_mb: float | None
     sweep_results: list[dict[str, float | int | str]]
     trace_path: str | None
+    profiled_model: str = "d=256, L=4"
 
 
-DEFAULT_MODEL_CONFIGS: list[ModelConfig] = [
-    ModelConfig(dim=256, layers=4),
-    ModelConfig(dim=512, layers=8),
-    ModelConfig(dim=768, layers=12),
-]
+MODEL_PRESETS: dict[str, ModelConfig] = {
+    "small": ModelConfig(dim=256, layers=4),
+    "medium": ModelConfig(dim=512, layers=8),
+    "large": ModelConfig(dim=768, layers=12),
+    "xlarge": ModelConfig(dim=1024, layers=16),
+}
+
+DEFAULT_MODEL_CONFIGS: list[ModelConfig] = list(MODEL_PRESETS.values())
+
+
+def _resolve_primary_config(
+    preset: str | None = None,
+    dim: int | None = None,
+    layers: int | None = None,
+    default_configs: list[ModelConfig] | None = None,
+) -> ModelConfig:
+    if preset:
+        preset_key = preset.lower()
+        if preset_key not in MODEL_PRESETS:
+            valid_keys = ", ".join(MODEL_PRESETS.keys())
+            raise ValueError(
+                f"Unknown preset '{preset}'. Available presets: {valid_keys}"
+            )
+        base = MODEL_PRESETS[preset_key]
+        return ModelConfig(
+            dim=dim if dim is not None else base.dim,
+            layers=layers if layers is not None else base.layers,
+            vocab_size=base.vocab_size,
+        )
+    if dim is not None or layers is not None:
+        return ModelConfig(
+            dim=dim if dim is not None else 256,
+            layers=layers if layers is not None else 4,
+        )
+    configs = default_configs or DEFAULT_MODEL_CONFIGS
+    return configs[0]
+
+
+def _resolve_model_configs(
+    preset: str | None = None,
+    dim: int | None = None,
+    layers: int | None = None,
+) -> list[ModelConfig]:
+    if not preset and dim is None and layers is None:
+        return DEFAULT_MODEL_CONFIGS
+
+    primary = _resolve_primary_config(preset=preset, dim=dim, layers=layers)
+    return [primary] + [cfg for cfg in DEFAULT_MODEL_CONFIGS if cfg != primary]
 
 
 class BenchmarkTransformerBlock(nn.Module):
-    def __init__(self, dim: int, num_heads: int = 4):
+    def __init__(self, dim: int, num_heads: int | None = None):
         super().__init__()
+        heads = num_heads if num_heads is not None else max(1, dim // 64)
         self.attn = nn.MultiheadAttention(
-            embed_dim=dim, num_heads=num_heads, batch_first=True
+            embed_dim=dim, num_heads=heads, batch_first=True
         )
         self.norm1 = nn.LayerNorm(dim)
         self.mlp = nn.Sequential(
@@ -134,11 +179,15 @@ class BenchmarkPolicyModel(nn.Module):
         vocab_size: int = DEFAULT_VOCAB_SIZE,
         dim: int = 256,
         num_layers: int = 4,
+        num_heads: int | None = None,
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, dim)
         self.layers = nn.ModuleList(
-            [BenchmarkTransformerBlock(dim) for _ in range(num_layers)]
+            [
+                BenchmarkTransformerBlock(dim, num_heads=num_heads)
+                for _ in range(num_layers)
+            ]
         )
         self.head = nn.Linear(dim, vocab_size, bias=False)
 
@@ -363,6 +412,7 @@ def _print_benchmark_results(report: BenchmarkReport) -> None:
     summary_table.add_row(
         "Backend / World Size:", f"{report.backend} | {report.world_size} ranks"
     )
+    summary_table.add_row("Profiled Model:", report.profiled_model)
     summary_table.add_row("Avg Step Latency:", f"{report.avg_step_ms:.2f} ms")
     summary_table.add_row(
         "Collective Comm:",
@@ -495,11 +545,30 @@ def _run_benchmark_suite(
         peak_vram_mb=peak_vram_mb,
         sweep_results=sweep_results,
         trace_path=trace_path,
+        profiled_model=primary_cfg.label,
     )
 
 
 @app.command()
 def main(
+    preset: str | None = typer.Option(
+        None,
+        "--preset",
+        "-p",
+        help="Model preset for primary profiling: small, medium, large, xlarge.",
+    ),
+    profile_dim: int | None = typer.Option(
+        None,
+        "--profile-dim",
+        "-d",
+        help="Hidden dimension for primary profiling model (overrides preset).",
+    ),
+    profile_layers: int | None = typer.Option(
+        None,
+        "--profile-layers",
+        "-l",
+        help="Number of layers for primary profiling model (overrides preset).",
+    ),
     with_stack: bool = typer.Option(
         False,
         "--with-stack/--no-with-stack",
@@ -531,13 +600,21 @@ def main(
 
     _setup_env_variables()
     ctx = _init_distributed()
+    model_configs = _resolve_model_configs(
+        preset=preset,
+        dim=profile_dim,
+        layers=profile_layers,
+    )
     prof_cfg = ProfilerConfig(
         warmup_steps=warmup_steps,
         profiled_steps=profiled_steps,
         with_stack=with_stack,
     )
     report = _run_benchmark_suite(
-        ctx, DEFAULT_MODEL_CONFIGS, prof_cfg=prof_cfg, trace_dir=trace_dir
+        ctx,
+        model_configs,
+        prof_cfg=prof_cfg,
+        trace_dir=trace_dir,
     )
     if ctx.rank == 0:
         _print_benchmark_results(report)
