@@ -410,6 +410,7 @@ def _print_benchmark_results(report: BenchmarkReport) -> None:
 
 
 def _setup_env_variables() -> None:
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
     if "RANK" not in os.environ and not dist.is_initialized():
         os.environ["RANK"] = "0"
         os.environ["LOCAL_RANK"] = "0"
@@ -420,7 +421,6 @@ def _setup_env_variables() -> None:
 
 def _init_distributed() -> DistributedContext:
     backend = "nccl" if torch.cuda.is_available() else "gloo"
-    dist.init_process_group(backend=backend)
 
     if torch.cuda.is_available():
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -430,6 +430,11 @@ def _init_distributed() -> DistributedContext:
     else:
         device = torch.device("cpu")
         device_type = "cpu"
+
+    dist.init_process_group(
+        backend=backend,
+        device_id=device if torch.cuda.is_available() else None,
+    )
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -487,6 +492,7 @@ def _run_benchmark_suite(
 
 def main() -> None:
     # Run command:
+    # export UV_LINK_MODE=copy  # optional: avoid hardlink warnings across volumes
     # uv run torchrun --standalone --nproc_per_node=2 --local-addr 127.0.0.1 \
     #   benchmarks/run_engine_benchmark.py
     _setup_env_variables()
