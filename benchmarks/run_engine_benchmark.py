@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import os
 import random
+import sys
 import time
 
 from rich import box
@@ -16,6 +17,7 @@ from torch.distributed import fsdp
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.device_mesh import init_device_mesh
 import torch.nn as nn
+import typer
 
 from vrollout import engine
 from vrollout import sync
@@ -36,6 +38,9 @@ DEFAULT_SWEEP_REPS = 5
 DEFAULT_SWEEP_WARMUP_REPS = 1
 MS_PER_SECOND = 1000.0
 US_PER_MS = 1000.0
+RECURSION_LIMIT_WITH_STACK = 10000
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +83,7 @@ class ProfilerConfig:
     profiled_steps: int = 5
     rollout_multiplier: int = 4
     min_rollouts: int = 8
+    with_stack: bool = False
     synthetic_config: SyntheticRolloutConfig = SyntheticRolloutConfig()
 
 
@@ -242,7 +248,7 @@ def _run_profiling(
         activities=activities,
         record_shapes=True,
         profile_memory=True,
-        with_stack=False,
+        with_stack=cfg.with_stack,
     ) as prof:
         for _ in range(cfg.profiled_steps):
             t0 = time.perf_counter()
@@ -410,7 +416,10 @@ def _print_benchmark_results(report: BenchmarkReport) -> None:
 
 
 def _setup_env_variables() -> None:
+    # set each worker process to use a single CPU thread for OpenMP runtime to avoid
+    # system from being overloaded in a multi-CPU environment.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
+
     if "RANK" not in os.environ and not dist.is_initialized():
         os.environ["RANK"] = "0"
         os.environ["LOCAL_RANK"] = "0"
@@ -453,6 +462,7 @@ def _run_benchmark_suite(
     ctx: DistributedContext,
     model_configs: list[ModelConfig],
     prof_cfg: ProfilerConfig | None = None,
+    trace_dir: str = DEFAULT_TRACE_DIR,
 ) -> BenchmarkReport:
     primary_cfg = model_configs[0]
     step_times, prof = _run_profiling(ctx, primary_cfg, prof_cfg)
@@ -470,9 +480,7 @@ def _run_benchmark_suite(
         else None
     )
     trace_path = (
-        _export_chrome_trace(
-            prof, output_dir=DEFAULT_TRACE_DIR, device_type=ctx.device_type
-        )
+        _export_chrome_trace(prof, output_dir=trace_dir, device_type=ctx.device_type)
         if ctx.rank == 0
         else None
     )
@@ -490,18 +498,51 @@ def _run_benchmark_suite(
     )
 
 
-def main() -> None:
+@app.command()
+def main(
+    with_stack: bool = typer.Option(
+        False,
+        "--with-stack/--no-with-stack",
+        help="Record Python stack frames during profiling (higher overhead).",
+    ),
+    warmup_steps: int = typer.Option(
+        2,
+        "--warmup-steps",
+        help="Number of untimed warmup iterations before profiling.",
+    ),
+    profiled_steps: int = typer.Option(
+        5,
+        "--profiled-steps",
+        help="Number of iterations captured within the profiler context.",
+    ),
+    trace_dir: str = typer.Option(
+        DEFAULT_TRACE_DIR,
+        "--trace-dir",
+        help="Directory where Chrome trace JSON files are saved.",
+    ),
+) -> None:
+    """Profiles distributed FSDP2 training iterations and weight broadcasting."""
     # Run command:
     # export UV_LINK_MODE=copy  # optional: avoid hardlink warnings across volumes
     # uv run torchrun --standalone --nproc_per_node=2 --local-addr 127.0.0.1 \
     #   benchmarks/run_engine_benchmark.py
+    if with_stack:
+        sys.setrecursionlimit(RECURSION_LIMIT_WITH_STACK)
+
     _setup_env_variables()
     ctx = _init_distributed()
-    report = _run_benchmark_suite(ctx, DEFAULT_MODEL_CONFIGS)
+    prof_cfg = ProfilerConfig(
+        warmup_steps=warmup_steps,
+        profiled_steps=profiled_steps,
+        with_stack=with_stack,
+    )
+    report = _run_benchmark_suite(
+        ctx, DEFAULT_MODEL_CONFIGS, prof_cfg=prof_cfg, trace_dir=trace_dir
+    )
     if ctx.rank == 0:
         _print_benchmark_results(report)
     dist.destroy_process_group()
 
 
 if __name__ == "__main__":
-    main()
+    app()
