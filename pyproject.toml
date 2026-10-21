@@ -61,7 +61,6 @@ pythonpath = ["."]
 [tool.coverage.run]
 branch = true
 omit = [
-    "src/vrollout/run_gpu_benchmark.py",
     "src/vrollout/train.py",
 ]
 
