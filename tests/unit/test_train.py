@@ -197,8 +197,9 @@ def test_create_models_falls_back_to_fp16_when_bf16_unsupported(
     train._create_models("test-model", backend="vllm", device=fake_device)
 
     assert mock_from_pretrained.call_count == 2
-    for call in mock_from_pretrained.call_args_list:
-        assert call.kwargs["dtype"] == torch.float16
+    ref_call, actor_call = mock_from_pretrained.call_args_list
+    assert ref_call.kwargs["dtype"] == torch.float16
+    assert actor_call.kwargs["dtype"] == torch.float32
 
 
 def test_create_models_uses_bf16_when_supported(
@@ -214,5 +215,6 @@ def test_create_models_uses_bf16_when_supported(
     train._create_models("test-model", backend="vllm", device=fake_device)
 
     assert mock_from_pretrained.call_count == 2
-    for call in mock_from_pretrained.call_args_list:
-        assert call.kwargs["dtype"] == torch.bfloat16
+    ref_call, actor_call = mock_from_pretrained.call_args_list
+    assert ref_call.kwargs["dtype"] == torch.bfloat16
+    assert actor_call.kwargs["dtype"] == torch.float32

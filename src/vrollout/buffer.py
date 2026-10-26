@@ -52,6 +52,31 @@ def _compute_global_advantages(
     return global_advantages
 
 
+def split_distributed_batch(
+    batch: DistributedBatch, split_size: int
+) -> list[DistributedBatch]:
+    """Splits a distributed batch into multiple smaller micro-batches."""
+    if split_size <= 0:
+        raise ValueError("split_size must be greater than 0.")
+
+    batch_size = batch.input_ids.shape[0]
+    splits = []
+
+    for start in range(0, batch_size, split_size):
+        end = min(start + split_size, batch_size)
+        split = DistributedBatch(
+            input_ids=batch.input_ids[start:end],
+            loss_mask=batch.loss_mask[start:end],
+            attention_mask=batch.attention_mask[start:end],
+            rewards=batch.rewards[start:end],
+            advantages=batch.advantages[start:end],
+            old_log_probs=batch.old_log_probs[start:end],
+        )
+        splits.append(split)
+
+    return splits
+
+
 class DistributedRolloutBuffer:
     """Partitions and collates scored rollouts across distributed training ranks."""
 

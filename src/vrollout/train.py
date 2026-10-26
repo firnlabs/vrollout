@@ -51,15 +51,26 @@ def _create_models(
     else:
         from transformers import AutoModelForCausalLM  # type: ignore[import-untyped]
 
-        dtype = (
+        ref_dtype = (
             torch.bfloat16
             if (device.type == "cuda" and torch.cuda.is_bf16_supported())
             else (torch.float16 if device.type == "cuda" else torch.float32)
         )
-        actor = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype).to(device)
-        reference = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype).to(
-            device
-        )
+        reference = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype=ref_dtype
+        ).to(device)
+
+        # set actor model dtype to float32 so that optimizer parameters work with that
+        # dtype, since autocast_dtype may downcast actor weights (e.g. bfloat16)
+        actor = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype=torch.float32
+        ).to(device)
+
+        if getattr(actor, "supports_gradient_checkpointing", False):
+            actor.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+        actor.train()
 
     for p in reference.parameters():
         p.requires_grad = False
@@ -198,6 +209,11 @@ def main(
     ),
     use_wandb: bool = typer.Option(False, "--wandb", help="Enable W&B tracking"),
     wandb_project: str = typer.Option("vrollout", help="W&B project name"),
+    micro_batch_size: int = typer.Option(4, help="Micro batch size for training"),
+    logit_chunk_size: int = typer.Option(128, help="Logit chunk size for training"),
+    max_grad_norm: float | None = typer.Option(
+        1.0, help="Maximum gradient norm for training"
+    ),
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
     console = Console()
@@ -331,6 +347,14 @@ def main(
         beta=beta,
         clip_eps=clip_eps,
         group_size=group_size,
+        micro_batch_size=micro_batch_size,
+        logit_chunk_size=logit_chunk_size,
+        max_grad_norm=max_grad_norm,
+        autocast_dtype=(
+            torch.bfloat16
+            if (device.type == "cuda" and torch.cuda.is_bf16_supported())
+            else None
+        ),
     )
 
     dist_engine = DistributedRLEngine(
