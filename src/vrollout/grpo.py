@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from jaxtyping import Bool
 from jaxtyping import Float
+from jaxtyping import Int
 import torch
 from torch import Tensor
 
@@ -55,6 +56,7 @@ def compute_grpo_loss(
     completion_mask: Bool[Tensor, "batch_size seq_len"],
     clip_eps: float = 0.2,
     beta: float = 0.04,
+    num_valid_tokens: Int[Tensor, ""] | int | None = None,
 ) -> tuple[Tensor, GRPOLossMetrics]:
     """Computes the GRPO loss and associated metrics.
 
@@ -66,6 +68,8 @@ def compute_grpo_loss(
         completion_mask: Boolean mask indicating True forvalid tokens; False otherwise.
         clip_eps: Clipping epsilon for the policy surrogate.
         beta: Coefficient for the KL divergence term.
+        num_valid_tokens: Number of valid tokens in the completion mask.
+            If None, it will be computed from the mask.
 
     Returns:
         A tuple containing the computed loss and metrics.
@@ -73,9 +77,11 @@ def compute_grpo_loss(
     Raises:
         ValueError: if there are no valid tokens in the completion mask.
     """
-    total_valid_tokens = completion_mask.sum()
+    total_valid_tokens = (
+        completion_mask.sum() if num_valid_tokens is None else num_valid_tokens
+    )
     if total_valid_tokens == 0:
-        raise ValueError("No valid tokens found in completion mask.")
+        raise ValueError("No valid tokens found.")
 
     ratios = torch.exp(log_probs - old_log_probs)
     advantages = advantages.unsqueeze(-1)

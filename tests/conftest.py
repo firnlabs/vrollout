@@ -2,6 +2,8 @@
 
 import os
 
+import torch
+
 # Disable Ray's automatic uv runtime_env propagation, which otherwise zips the
 # repository and provisions redundant virtualenvs per worker under `uv run pytest`.
 # This slows down local tests significantly, and is unnecessary given that the workers
@@ -31,6 +33,7 @@ from torch.distributed import device_mesh
 from torch.distributed import fsdp
 from torch.distributed.device_mesh import DeviceMesh
 
+from vrollout import buffer as vb
 from vrollout import types
 from vrollout.scorer import ScoredRollout
 from vrollout.testing import create_model
@@ -263,3 +266,18 @@ def mock_async_llm_engine(mocker: MockerFixture) -> MagicMock:
     mock_instance.generate = mock_generate
 
     return mock_instance
+
+
+@pytest.fixture
+def distributed_batch_factory() -> Callable[[int, int], vb.DistributedBatch]:
+    def _create_distributed_batch(batch_size: int, seq_len: int) -> vb.DistributedBatch:
+        return vb.DistributedBatch(
+            input_ids=torch.zeros((batch_size, seq_len), dtype=torch.int64),
+            loss_mask=torch.zeros((batch_size, seq_len), dtype=torch.bool),
+            attention_mask=torch.zeros((batch_size, seq_len), dtype=torch.bool),
+            rewards=torch.zeros((batch_size,), dtype=torch.float32),
+            advantages=torch.zeros((batch_size,), dtype=torch.float32),
+            old_log_probs=torch.zeros((batch_size, seq_len - 1), dtype=torch.float32),
+        )
+
+    return _create_distributed_batch

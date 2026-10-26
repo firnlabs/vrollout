@@ -1,3 +1,6 @@
+import math
+from typing import Callable
+
 import pytest
 import torch
 from torch.distributed.device_mesh import DeviceMesh
@@ -96,3 +99,39 @@ class TestDistributedRolloutBuffer:
         self, scored_rollouts: list[ScoredRollout], prompt_len: int, run_multiprocess
     ) -> None:
         run_multiprocess(_test_get_rank_batch_worker, scored_rollouts, prompt_len)
+
+
+@pytest.mark.parametrize(
+    "batch_size, split_size, exp_splits",
+    [
+        (8, 2, [2, 2, 2, 2]),
+        (8, 3, [3, 3, 2]),
+    ],
+)
+def test_split_distributed_batch(
+    batch_size: int,
+    split_size: int,
+    exp_splits: list[int],
+    distributed_batch_factory: Callable[[int, int], vb.DistributedBatch],
+):
+    seq_len = 2
+    batch = distributed_batch_factory(batch_size, seq_len)
+
+    result = vb.split_distributed_batch(batch, split_size)
+
+    assert len(result) == math.ceil(batch_size / split_size)
+    splits = [r.input_ids.shape[0] for r in result]
+    assert splits == exp_splits
+
+
+@pytest.mark.parametrize("split_size", [0, -1])
+def test_split_distributed_batch_error_split_size(
+    split_size,
+    distributed_batch_factory: Callable[[int, int], vb.DistributedBatch],
+):
+    batch_size = 8
+    seq_len = 2
+    batch = distributed_batch_factory(batch_size, seq_len)
+
+    with pytest.raises(ValueError, match="split_size must be greater than 0"):
+        vb.split_distributed_batch(batch, split_size)

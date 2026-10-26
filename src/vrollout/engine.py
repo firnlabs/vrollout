@@ -25,6 +25,10 @@ class RLEngineConfig:
     clip_eps: float = 0.2
     group_size: int = 1
     train_steps_per_iteration: int = 1
+    micro_batch_size: int = 4
+    logit_chunk_size: int = 128
+    max_grad_norm: float | None = 1.0
+    autocast_dtype: torch.dtype | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,10 @@ class DistributedRLEngine:
             optimizer=self._optimizer,
             beta=self._config.beta,
             clip_eps=self._config.clip_eps,
+            microbatch_size=self._config.micro_batch_size,
+            logit_chunk_size=self._config.logit_chunk_size,
+            max_grad_norm=self._config.max_grad_norm,
+            autocast_dtype=self._config.autocast_dtype,
         )
 
         self._broadcaster = sync.WeightBroadcaster(
