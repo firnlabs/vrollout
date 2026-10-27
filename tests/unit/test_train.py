@@ -4,6 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 import torch
+import typer
+from typer.testing import CliRunner
 
 from vrollout import scorer
 from vrollout import train
@@ -160,8 +162,6 @@ def test_build_qualitative_table_custom_max_chars() -> None:
 
 def test_cli_eval_completion_flags_registered() -> None:
     """Test that eval completion length CLI flags are registered in train app."""
-    import typer
-
     click_cmd = typer.main.get_command(train.app)
     opts = {opt for p in click_cmd.params for opt in p.opts}
 
@@ -172,13 +172,41 @@ def test_cli_eval_completion_flags_registered() -> None:
 
 def test_cli_eval_completion_flags_accepted() -> None:
     """Test that eval completion flags are accepted without parse error."""
-    from typer.testing import CliRunner
-
     runner = CliRunner()
 
     result = runner.invoke(
         train.app,
         ["--eval-completion-length", "64", "--eval-max-chars", "128", "--help"],
+    )
+
+    assert result.exit_code == 0
+
+
+def test_cli_wandb_flags_registered() -> None:
+    """Test that wandb CLI options are registered in train app."""
+    click_cmd = typer.main.get_command(train.app)
+
+    opts = {opt for p in click_cmd.params for opt in p.opts}
+
+    assert "--wandb" in opts
+    assert "--wandb-project" in opts
+    assert "--wandb-run-name" in opts
+
+
+def test_cli_wandb_flags_accepted() -> None:
+    """Test that wandb options are accepted without CLI parse error."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app,
+        [
+            "--wandb",
+            "--wandb-project",
+            "test-proj",
+            "--wandb-run-name",
+            "run-1",
+            "--help",
+        ],
     )
 
     assert result.exit_code == 0
