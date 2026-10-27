@@ -6,6 +6,7 @@ os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 import time
 from typing import Any
 
@@ -209,6 +210,14 @@ def main(
     ),
     use_wandb: bool = typer.Option(False, "--wandb", help="Enable W&B tracking"),
     wandb_project: str = typer.Option("vrollout", help="W&B project name"),
+    wandb_run_name: str | None = typer.Option(
+        None,
+        "--wandb-run-name",
+        help=(
+            "W&B run display name (defaults to "
+            "{model}-{backend}-{dataset}-G{group_size}-{timestamp})"
+        ),
+    ),
     micro_batch_size: int = typer.Option(4, help="Micro batch size for training"),
     logit_chunk_size: int = typer.Option(128, help="Logit chunk size for training"),
     max_grad_norm: float | None = typer.Option(
@@ -256,8 +265,17 @@ def main(
         try:
             import wandb as wb  # type: ignore[import-not-found]
 
+            short_model = model_name.split("/")[-1]
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            resolved_run_name = (
+                wandb_run_name
+                if wandb_run_name is not None
+                else f"{short_model}-{backend}-{dataset}-G{group_size}-{timestamp}"
+            )
+
             wandb_run = wb.init(
                 project=wandb_project,
+                name=resolved_run_name,
                 config={
                     "model_name": model_name,
                     "backend": backend,

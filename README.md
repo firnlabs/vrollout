@@ -69,6 +69,35 @@ uv run torchrun --standalone --nproc_per_node=4 \
   --wandb
 ```
 
+### Experiment tracking with Weights & Biases
+
+`vrollout` provides native, zero-overhead experiment tracking on `rank 0` with [Weights & Biases](https://wandb.ai):
+
+```bash
+uv run torchrun --standalone --nproc_per_node=4 \
+  -m vrollout.train \
+  --backend vllm \
+  --model-name Qwen/Qwen2.5-0.5B-Instruct \
+  --dataset gsm8k \
+  --group-size 8 \
+  --wandb \
+  --wandb-project vrollout \
+  --wandb-run-name qwen0.5b-gsm8k-run1
+```
+
+- **Run naming**: Runs default to an informative identifier formatted as `{model}-{backend}-{dataset}-G{group_size}-{timestamp}` (e.g. `Qwen2.5-0.5B-Instruct-vllm-gsm8k-G8-20261027_154500`). Use `--wandb-run-name` to supply a custom name.
+- **Offline / Local testing**: You can test without an account or internet access by setting `WANDB_MODE=offline`. Metrics will be logged locally to `wandb/` (ignored by git):
+
+  ```bash
+  WANDB_MODE=offline uv run torchrun --standalone --nproc_per_node=1 --local-addr 127.0.0.1 \
+    -m vrollout.train --backend mock --wandb
+  ```
+
+- **Live dashboards & Colab**: Authenticate using `uv run wandb login` or export `WANDB_API_KEY="<key>"`. Tracked metrics include:
+  - **Policy metrics**: `loss`, `kl`, `clip_fraction`, `reward_mean`, and `eval_reward_mean`.
+  - **Performance**: `step_time_s` per iteration.
+  - **Hardware telemetry**: GPU memory allocation, GPU power draw, temperature, and compute utilization.
+
 ### Running the distributed engine benchmark
 
 The following benchmark script profiles PyTorch FSDP2 model sharding, distributed training iterations, and parameter weight broadcasting across ranks (tested on CPU via `gloo` and GPU via `nccl`):
