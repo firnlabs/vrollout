@@ -22,11 +22,14 @@ from vrollout import generation
 from vrollout import pipeline
 from vrollout import scorer
 from vrollout import types
+from vrollout.datasets import DEFAULT_GSM8K_PROMPT_TEMPLATE
 from vrollout.datasets import load_gsm8k_dataset
 from vrollout.datasets import load_synthetic_dataset
 from vrollout.engine import DistributedRLEngine
 from vrollout.engine import RLEngineConfig
 from vrollout.testing import models
+from vrollout.verifiers import check_format_compliance
+from vrollout.verifiers import compute_format_compliance_rate
 from vrollout.verifiers import extract_numerical_answer
 from vrollout.verifiers import GSM8KVerifier
 from vrollout.verifiers import synthetic_verifier
@@ -103,7 +106,11 @@ def _run_evaluation(
     return mean_reward, scored_eval
 
 
-def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 256) -> str:
+def _format_eval_cell(
+    sr: scorer.ScoredRollout | None,
+    max_chars: int = 256,
+    target_format: str = "gsm8k",
+) -> str:
     """Formats a scored evaluation rollout cell with reward badge and snippet."""
     if sr is None:
         return "-"
@@ -112,11 +119,13 @@ def _format_eval_cell(sr: scorer.ScoredRollout | None, max_chars: int = 256) -> 
         if sr.reward >= 0.5
         else f"[red]✗ ({sr.reward:.1f})[/red]"
     )
+    compliant = check_format_compliance(sr.trajectory.text, target_format=target_format)
+    fmt_badge = "[cyan][fmt:✓][/cyan]" if compliant else "[yellow][fmt:✗][/yellow]"
     pred = extract_numerical_answer(sr.trajectory.text) or "N/A"
     text = sr.trajectory.text.strip().replace("\n", " ")
     if max_chars > 3 and len(text) > max_chars:
         text = f"...{text[-(max_chars - 3) :]}"
-    return f"{badge} [dim](pred: {pred})[/dim]\n{text}"
+    return f"{badge} {fmt_badge} [dim](pred: {pred})[/dim]\n{text}"
 
 
 def _build_qualitative_table(
@@ -126,6 +135,7 @@ def _build_qualitative_table(
     final_eval: list[scorer.ScoredRollout],
     max_samples: int = 3,
     max_chars: int = 256,
+    target_format: str = "gsm8k",
 ) -> Table:
     """Builds a side-by-side table comparing baseline and final eval completions."""
     sample_table = Table(
@@ -154,8 +164,16 @@ def _build_qualitative_table(
         sample_table.add_row(
             prompt,
             str(gt_ans),
-            _format_eval_cell(base_by_prompt.get(prompt), max_chars=max_chars),
-            _format_eval_cell(final_by_prompt.get(prompt), max_chars=max_chars),
+            _format_eval_cell(
+                base_by_prompt.get(prompt),
+                max_chars=max_chars,
+                target_format=target_format,
+            ),
+            _format_eval_cell(
+                final_by_prompt.get(prompt),
+                max_chars=max_chars,
+                target_format=target_format,
+            ),
         )
     return sample_table
 
@@ -222,6 +240,23 @@ def main(
     logit_chunk_size: int = typer.Option(128, help="Logit chunk size for training"),
     max_grad_norm: float | None = typer.Option(
         1.0, help="Maximum gradient norm for training"
+    ),
+    prompt_template: str = typer.Option(
+        DEFAULT_GSM8K_PROMPT_TEMPLATE,
+        "--prompt-template",
+        help="Reasoning prompt template with {question} placeholder for GSM8K",
+    ),
+    format_target: str = typer.Option(
+        "gsm8k",
+        "--format-target",
+        help=(
+            "Target format style for compliance evaluation ('gsm8k', 'boxed', or 'any')"
+        ),
+    ),
+    strict_format: bool = typer.Option(
+        False,
+        "--strict-format",
+        help="Whether reward scoring strictly enforces answer format tags",
     ),
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
@@ -313,10 +348,23 @@ def main(
 
         total_prompts_needed = num_prompts * num_iterations
         run_eval = eval_every > 0 and num_eval_prompts > 0
+        effective_template = (
+            None
+            if prompt_template.strip().lower() in ("", "none", "raw")
+            else prompt_template
+        )
         if dataset == "gsm8k":
-            data = load_gsm8k_dataset(num_samples=total_prompts_needed, split="train")
+            data = load_gsm8k_dataset(
+                num_samples=total_prompts_needed,
+                split="train",
+                prompt_template=effective_template,
+            )
             eval_data = (
-                load_gsm8k_dataset(num_samples=num_eval_prompts, split="test")
+                load_gsm8k_dataset(
+                    num_samples=num_eval_prompts,
+                    split="test",
+                    prompt_template=effective_template,
+                )
                 if run_eval
                 else []
             )
@@ -332,7 +380,7 @@ def main(
         verifier_fn = (
             synthetic_verifier
             if dataset == "synthetic" and backend == "mock"
-            else GSM8KVerifier(prompt_to_ans)
+            else GSM8KVerifier(prompt_to_ans, strict_format=strict_format)
         )
 
         all_prompts = [p for p, _ in data]
@@ -392,6 +440,7 @@ def main(
         "KL Div",
         "Clip Frac",
         "Mean Reward",
+        "Format Compliance Rate",
         "Eval Reward",
         "Time (s)",
         title="GRPO training progress",
@@ -407,6 +456,9 @@ def main(
         eval_reward0, baseline_eval_rollouts = _run_evaluation(
             rollout_pipeline, eval_prompts, eval_completion_len
         )
+        eval_format0 = compute_format_compliance_rate(
+            baseline_eval_rollouts, target_format=format_target
+        )
         final_eval_rollouts = baseline_eval_rollouts
         eval0_elapsed = time.perf_counter() - t_eval0
         table.add_row(
@@ -415,11 +467,18 @@ def main(
             "-",
             "-",
             "-",
+            f"{eval_format0:.1%}",
             f"{eval_reward0:.3f}",
             f"{eval0_elapsed:.2f}s",
         )
         if wandb_run:
-            wandb_run.log({"eval_reward_mean": eval_reward0}, step=0)
+            wandb_run.log(
+                {
+                    "eval_reward_mean": eval_reward0,
+                    "eval_format_compliance_rate": eval_format0,
+                },
+                step=0,
+            )
 
     for it in range(num_iterations):
         t0 = time.perf_counter()
@@ -443,10 +502,14 @@ def main(
 
         # periodic evaluation on held-out prompts (rank 0)
         eval_reward: float | None = None
+        eval_format_rate: float | None = None
         if rank == 0 and eval_every > 0 and (it + 1) % eval_every == 0 and eval_prompts:
             assert rollout_pipeline is not None
             eval_reward, final_eval_rollouts = _run_evaluation(
                 rollout_pipeline, eval_prompts, eval_completion_len
+            )
+            eval_format_rate = compute_format_compliance_rate(
+                final_eval_rollouts, target_format=format_target
             )
 
         elapsed = time.perf_counter() - t0
@@ -455,7 +518,13 @@ def main(
         if rank == 0:
             rewards = [sr.reward for sr in scored_rollouts]
             mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
+            train_format_rate = compute_format_compliance_rate(
+                scored_rollouts, target_format=format_target
+            )
             eval_reward_str = f"{eval_reward:.3f}" if eval_reward is not None else "-"
+            format_rate_str = f"{train_format_rate:.1%}"
+            if eval_format_rate is not None:
+                format_rate_str = f"{train_format_rate:.1%} / {eval_format_rate:.1%}"
 
             table.add_row(
                 str(it + 1),
@@ -463,6 +532,7 @@ def main(
                 f"{metrics.avg_kl:.4f}",
                 f"{metrics.avg_clip_fraction:.2%}",
                 f"{mean_reward:.3f}",
+                format_rate_str,
                 eval_reward_str,
                 f"{elapsed:.2f}s",
             )
@@ -473,10 +543,13 @@ def main(
                     "kl": metrics.avg_kl,
                     "clip_fraction": metrics.avg_clip_fraction,
                     "reward_mean": mean_reward,
+                    "format_compliance_rate": train_format_rate,
                     "step_time_s": elapsed,
                 }
                 if eval_reward is not None:
                     log_payload["eval_reward_mean"] = eval_reward
+                if eval_format_rate is not None:
+                    log_payload["eval_format_compliance_rate"] = eval_format_rate
                 wandb_run.log(log_payload, step=it + 1)
 
     if rank == 0:
@@ -489,6 +562,7 @@ def main(
                 final_eval=final_eval_rollouts,
                 max_samples=num_qualitative_samples,
                 max_chars=eval_max_chars,
+                target_format=format_target,
             )
             console.print(qualitative_table)
         if wandb_run:

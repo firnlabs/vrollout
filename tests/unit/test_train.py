@@ -30,25 +30,32 @@ def _make_scored_rollout(prompt: str, text: str, reward: float) -> scorer.Scored
 
 
 def test_format_eval_cell_none() -> None:
-    """Test formatting when rollout is None."""
     formatted = train._format_eval_cell(None)
 
     assert formatted == "-"
 
 
 def test_format_eval_cell_success() -> None:
-    """Test formatting for successful rollout with reward >= 0.5."""
     sr = _make_scored_rollout("What is 2+2?", "The answer is #### 4", 1.0)
 
     formatted = train._format_eval_cell(sr)
 
     assert "[green]✓ (1.0)[/green]" in formatted
+    assert "[cyan][fmt:✓][/cyan]" in formatted
     assert "(pred: 4)" in formatted
     assert "The answer is #### 4" in formatted
 
 
+def test_format_eval_cell_format_non_compliant() -> None:
+    sr = _make_scored_rollout("What is 2+2?", "The answer is 4", 1.0)
+
+    formatted = train._format_eval_cell(sr)
+
+    assert "[green]✓ (1.0)[/green]" in formatted
+    assert "[yellow][fmt:✗][/yellow]" in formatted
+
+
 def test_format_eval_cell_failure_truncation() -> None:
-    """Test formatting for failed rollout and text truncation."""
     long_text = "wrong " * 50
     sr = _make_scored_rollout("What is 2+2?", long_text, 0.0)
 
@@ -205,6 +212,33 @@ def test_cli_wandb_flags_accepted() -> None:
             "test-proj",
             "--wandb-run-name",
             "run-1",
+            "--help",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+
+def test_cli_format_flags_registered() -> None:
+    click_cmd = typer.main.get_command(train.app)
+    opts = {opt for p in click_cmd.params for opt in p.opts}
+
+    assert "--prompt-template" in opts
+    assert "--format-target" in opts
+    assert "--strict-format" in opts
+
+
+def test_cli_format_flags_accepted() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app,
+        [
+            "--prompt-template",
+            "Custom template {question}",
+            "--format-target",
+            "boxed",
+            "--strict-format",
             "--help",
         ],
     )
