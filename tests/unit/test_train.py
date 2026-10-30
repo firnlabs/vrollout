@@ -306,10 +306,13 @@ def test_cli_dist_timeout_rejects_non_positive(minutes: str) -> None:
     """Test that a timeout below one minute is rejected before training starts."""
     runner = CliRunner()
 
-    result = runner.invoke(train.app, ["--dist-timeout-minutes", minutes])
+    result = runner.invoke(
+        train.app, ["--dist-timeout-minutes", minutes], standalone_mode=False
+    )
 
-    assert result.exit_code == 2
-    assert "Invalid value for '--dist-timeout-minutes'" in result.output
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "dist_timeout_minutes"
 
 
 @pytest.mark.parametrize(
