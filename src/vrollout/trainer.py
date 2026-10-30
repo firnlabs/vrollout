@@ -5,9 +5,11 @@ from jaxtyping import Float
 from jaxtyping import Int
 from jaxtyping import jaxtyped
 import torch
+from torch import distributed as dist
 from torch import nn
 from torch import optim
 from torch import Tensor
+from torch.distributed import fsdp
 from torch.utils import checkpoint
 
 from vrollout import buffer as vb
@@ -98,9 +100,23 @@ class ModelTrainer:
     def train_step(self, dist_batch: DistributedBatch) -> grpo.GRPOLossMetrics:
         """Executes optimization step computing GRPO loss with KL penalty."""
         completion_mask = dist_batch.loss_mask[:, 1:]
-        num_valid_tokens = completion_mask.sum()
-        if num_valid_tokens == 0:
+        local_tokens = completion_mask.sum().to(torch.float32)
+
+        # with FSDP2, gradients are averaged across ranks (divided by world size W) in
+        # reduce-scatter. To get the exact global token mean sum_all / N_all instead of
+        # a mean of per-rank means, each rank normalizes its local sum by N_all / W.
+        data_parallel = (
+            isinstance(self._actor, fsdp.FSDPModule)
+            and dist.is_initialized()
+            and dist.get_world_size() > 1
+        )
+        world_size = dist.get_world_size() if data_parallel else 1
+        global_tokens = local_tokens.clone()
+        if data_parallel:
+            dist.all_reduce(global_tokens, op=dist.ReduceOp.SUM)
+        if global_tokens.item() == 0:
             raise ValueError("No valid tokens found in completion mask.")
+        num_valid_tokens = global_tokens / world_size
 
         # create microbatches
         microbatches = (
@@ -149,6 +165,23 @@ class ModelTrainer:
             )
 
         self._optimizer.step()
+
+        if data_parallel:
+            # average per-rank metrics: mean_r(sum_r * W / N_all) == sum_all / N_all
+            # where:
+            # - sum_r: sum of per-token metrics on rank r
+            # - W: world size
+            # - N_all: total number of valid tokens across all ranks
+            # - sum_all: sum of per-token metrics across all ranks
+            device = local_tokens.device
+            stats = torch.tensor(
+                [accum_loss, accum_kl, accum_clip_frac],
+                dtype=torch.float32,
+                device=device,
+            )
+            dist.all_reduce(stats, op=dist.ReduceOp.SUM)
+            stats /= world_size
+            accum_loss, accum_kl, accum_clip_frac = stats.tolist()
 
         return grpo.GRPOLossMetrics(
             loss=accum_loss,

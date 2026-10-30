@@ -69,6 +69,8 @@ uv run torchrun --standalone --nproc_per_node=4 \
   --wandb
 ```
 
+With more than one trainer rank, actor and reference models are sharded per transformer block with FSDP2, and the GRPO loss is normalized by the global token count so the update matches a single-process step on the full batch. A single rank trains unsharded by default; pass `--fsdp` to shard anyway (e.g. to exercise the FSDP2 path on one GPU). `--no-fsdp` is rejected when the world size is greater than 1, since nothing else synchronizes gradients.
+
 ### Experiment tracking with Weights & Biases
 
 `vrollout` provides native, zero-overhead experiment tracking on `rank 0` with [Weights & Biases](https://wandb.ai):
