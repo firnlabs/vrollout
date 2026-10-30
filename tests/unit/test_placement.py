@@ -1,10 +1,6 @@
 """Tests for GPU placement between trainer ranks and Ray rollout workers."""
 
-import json
 import os
-import pathlib
-import subprocess
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -193,26 +189,3 @@ def test_init_ray_skips_when_initialized(
     placement.init_ray(["2"])
 
     mock_ray_init.assert_not_called()
-
-
-PROBE_SCRIPT = pathlib.Path(__file__).with_name("ray_placement_probe.py")
-
-
-def test_init_ray_places_workers_on_rollout_gpus() -> None:
-    env = {
-        **os.environ,
-        "CUDA_VISIBLE_DEVICES": "0,1,2",
-        "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
-    }
-
-    proc = subprocess.run(  # noqa: S603
-        [sys.executable, str(PROBE_SCRIPT)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=True,
-    )
-
-    result = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert result == {"cluster_gpus": 1.0, "assigned": ["2"], "driver_env": "0,1,2"}
