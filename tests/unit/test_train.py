@@ -1,5 +1,6 @@
 """Unit tests for train CLI qualitative table and evaluation rendering."""
 
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -280,3 +281,76 @@ def test_create_models_uses_bf16_when_supported(
     ref_call, actor_call = mock_from_pretrained.call_args_list
     assert ref_call.kwargs["dtype"] == torch.bfloat16
     assert actor_call.kwargs["dtype"] == torch.float32
+
+
+def test_cli_dist_timeout_flag_registered() -> None:
+    """Test that the distributed timeout CLI option is registered in train app."""
+    click_cmd = typer.main.get_command(train.app)
+
+    opts = {opt for p in click_cmd.params for opt in p.opts}
+
+    assert "--dist-timeout-minutes" in opts
+
+
+def test_cli_dist_timeout_flag_accepted() -> None:
+    """Test that the distributed timeout flag is accepted without parse error."""
+    runner = CliRunner()
+
+    result = runner.invoke(train.app, ["--dist-timeout-minutes", "90", "--help"])
+
+    assert result.exit_code == 0
+
+
+@pytest.mark.parametrize("minutes", ["0", "-5"])
+def test_cli_dist_timeout_rejects_non_positive(minutes: str) -> None:
+    """Test that a timeout below one minute is rejected before training starts."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app, ["--dist-timeout-minutes", minutes], standalone_mode=False
+    )
+
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "dist_timeout_minutes"
+
+
+@pytest.mark.parametrize(
+    ("device", "backend", "device_id"),
+    [
+        pytest.param(torch.device("cpu"), "gloo", None, id="cpu-gloo"),
+        pytest.param(
+            torch.device("cuda:1"), "nccl", torch.device("cuda:1"), id="cuda-nccl"
+        ),
+    ],
+)
+def test_init_distributed_passes_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    device: torch.device,
+    backend: str,
+    device_id: torch.device | None,
+) -> None:
+    """Test that the process group is created with the configured timeout."""
+    monkeypatch.setattr(train.dist, "is_initialized", lambda: False)
+    mock_init = MagicMock()
+    monkeypatch.setattr(train.dist, "init_process_group", mock_init)
+    timeout = timedelta(minutes=90)
+
+    train._init_distributed(device, timeout)
+
+    mock_init.assert_called_once_with(
+        backend=backend, device_id=device_id, timeout=timeout
+    )
+
+
+def test_init_distributed_skips_when_initialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that an existing process group is reused."""
+    monkeypatch.setattr(train.dist, "is_initialized", lambda: True)
+    mock_init = MagicMock()
+    monkeypatch.setattr(train.dist, "init_process_group", mock_init)
+
+    train._init_distributed(torch.device("cpu"), timedelta(minutes=90))
+
+    mock_init.assert_not_called()

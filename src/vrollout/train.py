@@ -7,6 +7,7 @@ os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 import time
 from typing import Any
 
@@ -83,6 +84,18 @@ def _create_models(
     reference.eval()
 
     return actor, reference
+
+
+def _init_distributed(device: torch.device, timeout: timedelta) -> None:
+    """Initializes the default process group unless one already exists."""
+    if dist.is_initialized():
+        return
+    use_cuda = device.type == "cuda"
+    dist.init_process_group(
+        backend="nccl" if use_cuda else "gloo",
+        device_id=device if use_cuda else None,
+        timeout=timeout,
+    )
 
 
 def _run_evaluation(
@@ -246,6 +259,14 @@ def main(
             "(defaults to on when world size > 1)"
         ),
     ),
+    dist_timeout_minutes: int = typer.Option(
+        60,
+        min=1,
+        help=(
+            "Timeout for collectives; must exceed one rollout + eval cycle, since "
+            "non-zero ranks wait in a collective while rank 0 generates"
+        ),
+    ),
     micro_batch_size: int = typer.Option(4, help="Micro batch size for training"),
     logit_chunk_size: int = typer.Option(128, help="Logit chunk size for training"),
     max_grad_norm: float | None = typer.Option(
@@ -281,13 +302,7 @@ def main(
     else:
         device = torch.device("cpu")
 
-    # initialize distributed environment
-    if not dist.is_initialized():
-        backend_dist = "nccl" if torch.cuda.is_available() else "gloo"
-        dist.init_process_group(
-            backend=backend_dist,
-            device_id=device if torch.cuda.is_available() else None,
-        )
+    _init_distributed(device, timedelta(minutes=dist_timeout_minutes))
 
     # prevent Ray and vLLM child processes from inheriting torchelastic agent store
     os.environ["TORCHELASTIC_USE_AGENT_STORE"] = "False"

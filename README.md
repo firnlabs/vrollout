@@ -71,6 +71,8 @@ uv run torchrun --standalone --nproc_per_node=4 \
 
 With more than one trainer rank, actor and reference models are sharded per transformer block with FSDP2, and the GRPO loss is normalized by the global token count so the update matches a single-process step on the full batch. A single rank trains unsharded by default; pass `--fsdp` to shard anyway (e.g. to exercise the FSDP2 path on one GPU). `--no-fsdp` is rejected when the world size is greater than 1, since nothing else synchronizes gradients.
 
+Only rank 0 drives rollouts and evaluation; the other ranks wait in a collective until it broadcasts the next batch. `--dist-timeout-minutes` (default 60) bounds that wait, so raise it if one rollout + eval cycle can take longer (e.g. evaluating the full GSM8K test split).
+
 ### Experiment tracking with Weights & Biases
 
 `vrollout` provides native, zero-overhead experiment tracking on `rank 0` with [Weights & Biases](https://wandb.ai):
