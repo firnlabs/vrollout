@@ -16,11 +16,13 @@ import torch
 from torch import distributed as dist
 from torch import nn
 from torch import optim
+from torch.distributed.device_mesh import init_device_mesh
 import typer
 
 from vrollout import generation
 from vrollout import pipeline
 from vrollout import scorer
+from vrollout import sharding
 from vrollout import types
 from vrollout.datasets import DEFAULT_GSM8K_PROMPT_TEMPLATE
 from vrollout.datasets import load_gsm8k_dataset
@@ -236,6 +238,14 @@ def main(
             "{model}-{backend}-{dataset}-G{group_size}-{timestamp})"
         ),
     ),
+    use_fsdp: bool | None = typer.Option(
+        None,
+        "--fsdp/--no-fsdp",
+        help=(
+            "Shard actor and reference models with FSDP2 across trainer ranks "
+            "(defaults to on when world size > 1)"
+        ),
+    ),
     micro_batch_size: int = typer.Option(4, help="Micro batch size for training"),
     logit_chunk_size: int = typer.Option(128, help="Logit chunk size for training"),
     max_grad_norm: float | None = typer.Option(
@@ -284,6 +294,16 @@ def main(
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+    shard_models = world_size > 1 if use_fsdp is None else use_fsdp
+
+    if world_size > 1 and not shard_models:
+        # without FSDP2 nothing synchronizes gradients, so ranks would silently train
+        # divergent model copies
+        dist.destroy_process_group()
+        raise typer.BadParameter(
+            "Multi-rank training requires --fsdp (gradients are not synchronized "
+            "otherwise). Use --nproc_per_node=1 to train without FSDP2."
+        )
 
     if rank == 0:
         console.rule("[bold cyan]vRollout Distributed GRPO Trainer[/bold cyan]")
@@ -291,7 +311,8 @@ def main(
             f"[dim]World Size:[/dim] {world_size} | "
             f"[dim]Backend:[/dim] {backend} | "
             f"[dim]Model:[/dim] {model_name} | "
-            f"[dim]Group Size:[/dim] {group_size}"
+            f"[dim]Group Size:[/dim] {group_size} | "
+            f"[dim]FSDP2:[/dim] {'on' if shard_models else 'off'}"
         )
 
     # initialize Weights & Biases on rank 0 if requested
@@ -324,6 +345,8 @@ def main(
                     "lr": lr,
                     "beta": beta,
                     "clip_eps": clip_eps,
+                    "fsdp": shard_models,
+                    "world_size": world_size,
                 },
             )
         except ImportError:
@@ -331,6 +354,11 @@ def main(
 
     # setup models and optimizer
     actor, reference = _create_models(model_name, backend, device)
+    if shard_models:
+        # shard before creating the optimizer: fully_shard swaps parameters for DTensors
+        mesh = init_device_mesh(device.type, (world_size,))
+        actor = sharding.shard_model(actor, mesh)
+        reference = sharding.shard_model(reference, mesh)
     optimizer = optim.AdamW(actor.parameters(), lr=lr)
 
     # Ray rollout pipeline initialization (rank 0 manages Ray actors)

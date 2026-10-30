@@ -56,7 +56,7 @@ def compute_grpo_loss(
     completion_mask: Bool[Tensor, "batch_size seq_len"],
     clip_eps: float = 0.2,
     beta: float = 0.04,
-    num_valid_tokens: Int[Tensor, ""] | int | None = None,
+    num_valid_tokens: (Int[Tensor, ""] | Float[Tensor, ""] | int | float | None) = None,
 ) -> tuple[Tensor, GRPOLossMetrics]:
     """Computes the GRPO loss and associated metrics.
 
@@ -68,8 +68,10 @@ def compute_grpo_loss(
         completion_mask: Boolean mask indicating True forvalid tokens; False otherwise.
         clip_eps: Clipping epsilon for the policy surrogate.
         beta: Coefficient for the KL divergence term.
-        num_valid_tokens: Number of valid tokens in the completion mask.
-            If None, it will be computed from the mask.
+        num_valid_tokens: Normalizer for the summed per-token loss, typically the
+            number of valid tokens in the completion mask. Data-parallel callers pass
+            the global token count divided by world size. If None, it is computed
+            from the mask.
 
     Returns:
         A tuple containing the computed loss and metrics.
