@@ -55,10 +55,10 @@ uv run torchrun --standalone --nproc_per_node=2 --local-addr 127.0.0.1 \
 
 ### GPU cluster training (vLLM backend)
 
-Train an open-weight policy on a GPU cluster using Ray rollout actors backed by vLLM:
+Train an open-weight policy on a single GPU node using Ray rollout actors backed by vLLM. On a 4-GPU node, the command below trains on GPUs 0-1 and serves vLLM on GPUs 2-3:
 
 ```bash
-uv run torchrun --standalone --nproc_per_node=4 \
+uv run torchrun --standalone --nproc_per_node=2 \
   -m vrollout.train \
   --backend vllm \
   --model-name Qwen/Qwen2.5-0.5B-Instruct \
@@ -72,6 +72,8 @@ uv run torchrun --standalone --nproc_per_node=4 \
 With more than one trainer rank, actor and reference models are sharded per transformer block with FSDP2, and the GRPO loss is normalized by the global token count so the update matches a single-process step on the full batch. A single rank trains unsharded by default; pass `--fsdp` to shard anyway (e.g. to exercise the FSDP2 path on one GPU). `--no-fsdp` is rejected when the world size is greater than 1, since nothing else synchronizes gradients.
 
 Only rank 0 drives rollouts and evaluation; the other ranks wait in a collective until it broadcasts the next batch. `--dist-timeout-minutes` (default 60) bounds that wait, so raise it if one rollout + eval cycle can take longer (e.g. evaluating the full GSM8K test split).
+
+Trainer rank `r` uses the `r`-th visible GPU, and Ray rollout workers are placed only on the GPUs left over. If there are none (e.g. one GPU, or as many trainer ranks as GPUs), vLLM shares the trainers' GPUs, so lower `--gpu-memory-utilization` and use a fractional `--gpus-per-worker`. Training refuses to start if `--num-rollout-workers` x `--gpus-per-worker` cannot fit on the rollout GPUs, since Ray would otherwise wait for resources indefinitely.
 
 ### Experiment tracking with Weights & Biases
 

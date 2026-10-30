@@ -22,6 +22,7 @@ import typer
 
 from vrollout import generation
 from vrollout import pipeline
+from vrollout import placement
 from vrollout import scorer
 from vrollout import sharding
 from vrollout import types
@@ -320,6 +321,23 @@ def main(
             "otherwise). Use --nproc_per_node=1 to train without FSDP2."
         )
 
+    # validated on every rank so a bad layout fails all ranks instead of leaving the
+    # others blocked in a collective
+    rollout_gpu_ids: list[str] | None = None
+    rollout_shares_trainer_gpus = False
+    if device.type == "cuda":
+        visible = placement.visible_gpu_ids(
+            os.environ.get("CUDA_VISIBLE_DEVICES"), torch.cuda.device_count()
+        )
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", world_size))
+        try:
+            rollout_gpu_ids, rollout_shares_trainer_gpus = placement.plan_rollout_gpus(
+                visible, local_world_size, num_rollout_workers, gpus_per_worker
+            )
+        except ValueError as e:
+            dist.destroy_process_group()
+            raise typer.BadParameter(str(e)) from e
+
     if rank == 0:
         console.rule("[bold cyan]vRollout Distributed GRPO Trainer[/bold cyan]")
         console.print(
@@ -329,6 +347,13 @@ def main(
             f"[dim]Group Size:[/dim] {group_size} | "
             f"[dim]FSDP2:[/dim] {'on' if shard_models else 'off'}"
         )
+        if rollout_gpu_ids is not None:
+            console.print(f"[dim]Rollout GPUs:[/dim] {','.join(rollout_gpu_ids)}")
+            if rollout_shares_trainer_gpus and gpus_per_worker > 0:
+                console.print(
+                    "[yellow]Warning: no spare GPU for rollouts; vLLM shares GPUs "
+                    "with trainer ranks.[/yellow]"
+                )
 
     # initialize Weights & Biases on rank 0 if requested
     wandb_run = None
@@ -383,11 +408,8 @@ def main(
     prompt_to_ans: dict[str, str] = {}
 
     if rank == 0:
-        import ray
-
-        if not ray.is_initialized():
-            os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-            ray.init(ignore_reinit_error=True, include_dashboard=False)
+        os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+        placement.init_ray(rollout_gpu_ids)
 
         total_prompts_needed = num_prompts * num_iterations
         run_eval = eval_every > 0 and num_eval_prompts > 0
