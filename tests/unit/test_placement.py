@@ -101,6 +101,31 @@ def test_check_rollout_capacity_rejects_overflow(
         placement.check_rollout_capacity(num_gpus, num_workers, gpus_per_worker)
 
 
+def test_plan_rollout_gpus_returns_spare_gpus() -> None:
+    ids, shared = placement.plan_rollout_gpus(
+        ["0", "1", "2"], num_trainer_ranks=2, num_workers=2, gpus_per_worker=0.5
+    )
+
+    assert ids == ["2"]
+    assert not shared
+
+
+@pytest.mark.parametrize(
+    ("num_trainer_ranks", "num_workers", "match"),
+    [
+        pytest.param(4, 1, "trainer ranks", id="too-many-ranks"),
+        pytest.param(2, 2, "rollout workers", id="workers-overflow-spare-gpu"),
+    ],
+)
+def test_plan_rollout_gpus_rejects_invalid_layout(
+    num_trainer_ranks: int, num_workers: int, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        placement.plan_rollout_gpus(
+            ["0", "1", "2"], num_trainer_ranks, num_workers, gpus_per_worker=1.0
+        )
+
+
 @pytest.mark.parametrize(
     "previous", [pytest.param("0,1,2", id="set"), pytest.param(None, id="unset")]
 )

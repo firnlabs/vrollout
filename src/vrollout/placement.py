@@ -56,7 +56,7 @@ def check_rollout_capacity(
     """Fails fast when Ray could not schedule every rollout worker.
 
     Ray leaves unschedulable actors pending forever, which hangs training instead of
-    erroring. A fractional worker must fit within a single GPU, so e.g. three 0.6-GPU
+    erroring. A fractional worker must fit within a single GPU, e.g. three 0.6-GPU
     workers do not fit on two GPUs even though 1.8 <= 2.
 
     Args:
@@ -79,6 +79,32 @@ def check_rollout_capacity(
             f"{num_workers} rollout workers x {gpus_per_worker} GPUs do not fit on "
             f"{num_gpus} rollout GPUs (capacity {capacity} workers)"
         )
+
+
+def plan_rollout_gpus(
+    visible: Sequence[str],
+    num_trainer_ranks: int,
+    num_workers: int,
+    gpus_per_worker: float,
+) -> tuple[list[str], bool]:
+    """Selects the rollout GPUs and checks that every rollout worker fits on them.
+
+    Combines `select_rollout_gpus` and `check_rollout_capacity` so callers can
+    handle an invalid layout in one place; their `ValueError` propagates unchanged.
+
+    Args:
+        visible: GPU IDs visible to this process, in CUDA ordinal order.
+        num_trainer_ranks: Number of trainer ranks on this node.
+        num_workers: Number of rollout workers.
+        gpus_per_worker: GPUs requested per worker; 0 means CPU-only workers.
+
+    Returns:
+        The GPU IDs Ray may place rollout workers on, and True if those GPUs are
+        also used by trainer ranks.
+    """
+    gpu_ids, shared = select_rollout_gpus(visible, num_trainer_ranks)
+    check_rollout_capacity(len(gpu_ids), num_workers, gpus_per_worker)
+    return gpu_ids, shared
 
 
 @contextmanager

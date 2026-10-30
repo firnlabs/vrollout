@@ -326,16 +326,13 @@ def main(
     rollout_gpu_ids: list[str] | None = None
     rollout_shares_trainer_gpus = False
     if device.type == "cuda":
+        visible = placement.visible_gpu_ids(
+            os.environ.get("CUDA_VISIBLE_DEVICES"), torch.cuda.device_count()
+        )
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", world_size))
         try:
-            visible = placement.visible_gpu_ids(
-                os.environ.get("CUDA_VISIBLE_DEVICES"), torch.cuda.device_count()
-            )
-            local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", world_size))
-            rollout_gpu_ids, rollout_shares_trainer_gpus = (
-                placement.select_rollout_gpus(visible, local_world_size)
-            )
-            placement.check_rollout_capacity(
-                len(rollout_gpu_ids), num_rollout_workers, gpus_per_worker
+            rollout_gpu_ids, rollout_shares_trainer_gpus = placement.plan_rollout_gpus(
+                visible, local_world_size, num_rollout_workers, gpus_per_worker
             )
         except ValueError as e:
             dist.destroy_process_group()
