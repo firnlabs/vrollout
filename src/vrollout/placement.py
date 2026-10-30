@@ -1,6 +1,6 @@
 """Single-node GPU placement between trainer ranks and Ray rollout workers."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Sequence
 from contextlib import contextmanager
 import math
@@ -108,7 +108,7 @@ def plan_rollout_gpus(
 
 
 @contextmanager
-def cuda_visible_devices(gpu_ids: Sequence[str]) -> Iterator[None]:
+def cuda_visible_devices(gpu_ids: Sequence[str]) -> Generator[None]:
     """Temporarily sets `CUDA_VISIBLE_DEVICES`, restoring the previous value on exit."""
     previous = os.environ.get(_CUDA_VISIBLE_DEVICES)
     os.environ[_CUDA_VISIBLE_DEVICES] = ",".join(gpu_ids)
