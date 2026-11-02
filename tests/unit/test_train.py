@@ -315,6 +315,16 @@ def test_cli_dist_timeout_rejects_non_positive(minutes: str) -> None:
     assert result.exception.param.name == "dist_timeout_minutes"
 
 
+def test_cli_num_iterations_rejects_negative() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(train.app, ["--num-iterations", "-1"], standalone_mode=False)
+
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "num_iterations"
+
+
 @pytest.mark.parametrize(
     ("device", "backend", "device_id"),
     [
