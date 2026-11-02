@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-import itertools
 import logging
 from typing import Any
 
@@ -68,9 +67,14 @@ class RolloutPipeline:
             )
         )
 
-        for chunk in itertools.batched(prompts, self._config.chunk_size):
-            rollout_chunk = await self._manager.generate(chunk, sampling_params)
-            await queue.put_items(rollout_chunk)
+        # awaiting in submission order keeps each prompt's group_size completions
+        # contiguous and the batch order deterministic, while all chunks generate
+        # concurrently
+        chunk_refs = self._manager.submit(
+            prompts, sampling_params, self._config.chunk_size
+        )
+        for ref in chunk_refs:
+            await queue.put_items(await ref)
 
         await queue.join()
         stop_event.set()

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 import itertools
@@ -84,6 +85,22 @@ class TestRolloutWorker:
             assert r.request_id == f"request_{i}"
             assert r.finish_reason == "stop"
             assert r.worker_id == worker_id
+
+    @pytest.mark.asyncio
+    async def test_concurrent_batches_get_unique_request_ids(
+        self,
+        worker: generation.RolloutWorker,
+        sampling_params: types.SamplingParams,
+    ):
+        prompts = ["Prompt 1", "Prompt 2"]
+
+        batches = await asyncio.gather(
+            worker.generate_batch(prompts, sampling_params),
+            worker.generate_batch(prompts, sampling_params),
+        )
+
+        request_ids = [r.request_id for batch in batches for r in batch]
+        assert len(set(request_ids)) == len(request_ids)
 
     @pytest.mark.asyncio
     async def test_actor_rollout_worker_remote(
@@ -188,6 +205,20 @@ class TestRolloutManager:
             exp_worker_id = next(worker_id_cycler)
             for r in chunk:
                 assert r.worker_id == exp_worker_id
+
+    @pytest.mark.asyncio
+    async def test_submit_returns_one_ref_per_chunk_in_order(
+        self,
+        manager: generation.RolloutManager,
+        sampling_params: types.SamplingParams,
+    ):
+        prompts = [f"Prompt {i}" for i in range(7)]
+
+        refs = manager.submit(prompts, sampling_params, chunk_size=3)
+        chunks = [await ref for ref in refs]
+
+        assert [len(c) for c in chunks] == [3, 3, 1]
+        assert [r.prompt for c in chunks for r in c] == prompts
 
     @pytest.mark.asyncio
     async def test_generate_invalid_chunk_size(

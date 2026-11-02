@@ -119,6 +119,7 @@ class TestAsyncVLLMEngine:
             gpu_memory_utilization=0.4,
             max_model_len=512,
             enforce_eager=False,
+            max_num_seqs=128,
         )
 
         mock_args.assert_called_once_with(
@@ -127,6 +128,7 @@ class TestAsyncVLLMEngine:
             gpu_memory_utilization=0.4,
             max_model_len=512,
             enforce_eager=False,
+            max_num_seqs=128,
             distributed_executor_backend="mp",
         )
 
@@ -147,6 +149,7 @@ class TestAsyncVLLMEngine:
             gpu_memory_utilization=0.4,
             max_model_len=512,
             enforce_eager=True,
+            max_num_seqs=None,
             distributed_executor_backend="uni",
         )
 

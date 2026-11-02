@@ -99,7 +99,7 @@ class RolloutConfig:
     backend: str | None = None
     num_workers: int = 2
     gpus_per_worker: float = 0.0  # default 0.0 for local testing
-    max_batch_size: int = 64
+    max_num_seqs: int | None = None
     max_seq_len: int = 512
     gpu_memory_utilization: float = 0.60
     enforce_eager: bool = True
