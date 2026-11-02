@@ -84,6 +84,7 @@ def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
         gpu_memory_utilization=config.gpu_memory_utilization,
         max_model_len=config.max_seq_len,
         enforce_eager=config.enforce_eager,
+        max_num_seqs=config.max_num_seqs,
     )
 
 
@@ -111,6 +112,10 @@ class RolloutWorker:
             _create_llm_engine(self._config) if llm_engine is None else llm_engine
         )
         self._weights_version = 0
+        # use monotonically increasing integers as IDs for requests
+        # vLLM rejects duplicate in-flight request IDs, and batches on one worker
+        # can run concurrently
+        self._request_ids = itertools.count()
 
     async def _generate_single(
         self, prompt: str, sampling_params: SamplingParams, request_id: str
@@ -131,8 +136,10 @@ class RolloutWorker:
     ) -> list[RolloutTrajectory]:
         """Generates rollout trajectories asynchronously for a batch of prompts."""
         tasks = [
-            self._generate_single(p, sampling_params, f"request_{i}")
-            for i, p in enumerate(prompts)
+            self._generate_single(
+                p, sampling_params, f"request_{next(self._request_ids)}"
+            )
+            for p in prompts
         ]
         results = await asyncio.gather(*tasks)
         return [traj for group in results for traj in group]
@@ -180,26 +187,49 @@ class RolloutManager:
 
         self._worker_cycler = itertools.cycle(self._workers)
 
+    def submit(
+        self,
+        prompts: Sequence[str],
+        sampling_params: SamplingParams,
+        chunk_size: int = 8,
+    ) -> list[ray.ObjectRef[list[RolloutTrajectory]]]:
+        """Dispatches all prompt chunks at once, round-robin across Ray workers.
+
+        Every chunk is in flight before this returns, so each vLLM engine can batch
+        all of its chunks together. Memory is bounded by the engine's KV cache and
+        scheduler (`max_num_seqs`), not by the chunk size.
+
+        Args:
+            prompts: Prompts to generate completions for.
+            sampling_params: Sampling parameters shared by all prompts.
+            chunk_size: Number of prompts per worker request.
+
+        Returns:
+            One awaitable reference per chunk, in prompt order, each resolving to the
+            chunk's trajectories.
+
+        Raises:
+            ValueError: If `chunk_size` is not positive.
+        """
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+        return [
+            next(self._worker_cycler).generate_batch.remote(chunk, sampling_params)  # ty: ignore[unresolved-attribute]
+            for chunk in itertools.batched(prompts, chunk_size)
+        ]
+
     async def generate(
         self,
         prompts: Sequence[str],
         sampling_params: SamplingParams,
         chunk_size: int = 8,
     ) -> list[RolloutTrajectory]:
-        """Dispatches prompt chunks in round-robin order to Ray rollout workers."""
-        if chunk_size <= 0:
-            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-
-        tasks = []
-        for chunk in itertools.batched(prompts, chunk_size):
-            worker = next(self._worker_cycler)
-            task = worker.generate_batch.remote(chunk, sampling_params)  # ty: ignore[unresolved-attribute]
-            tasks.append(task)
-
-        results = await asyncio.gather(*tasks)
-        # flatten results
-        results = [r for chunk in results for r in chunk]
-        return results
+        """Generates trajectories for all prompts, preserving prompt order."""
+        results = await asyncio.gather(
+            *self.submit(prompts, sampling_params, chunk_size)
+        )
+        return [r for chunk in results for r in chunk]
 
     @jaxtyped(typechecker=beartype)
     def update_weights(self, weights: Mapping[str, Shaped[Tensor, "..."]]) -> None:

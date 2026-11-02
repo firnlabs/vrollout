@@ -227,6 +227,11 @@ def main(
     gpu_memory_utilization: float = typer.Option(
         0.4, help="Fraction of GPU memory reserved for vLLM KV cache"
     ),
+    max_num_seqs: int | None = typer.Option(
+        None,
+        min=1,
+        help="Max sequences each vLLM engine runs at once (defaults to vLLM's default)",
+    ),
     max_tokens: int = typer.Option(32, help="Max completion tokens to generate"),
     eval_max_tokens: int | None = typer.Option(
         None,
@@ -463,6 +468,7 @@ def main(
             gpus_per_worker=gpus_per_worker,
             max_seq_len=max(max_seq_len, effective_max_tokens * 2),
             gpu_memory_utilization=gpu_memory_utilization,
+            max_num_seqs=max_num_seqs,
             enforce_eager=enforce_eager,
         )
         rollout_manager = generation.RolloutManager(rollout_config)
