@@ -203,7 +203,11 @@ def main(
         4, "--group-size", "-G", help="Number of completions per prompt for GRPO"
     ),
     num_prompts: int = typer.Option(4, help="Number of prompts per iteration"),
-    num_iterations: int = typer.Option(3, help="Number of training iterations"),
+    num_iterations: int = typer.Option(
+        3,
+        min=0,
+        help="Number of training iterations (0 runs only the baseline evaluation)",
+    ),
     eval_every: int = typer.Option(
         1, help="Run evaluation every N iterations (0 to disable)"
     ),

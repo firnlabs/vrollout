@@ -61,6 +61,15 @@ def test_load_gsm8k_dataset(
     assert samples[0] == (expected_prompt, "Step 0\n#### 0")
 
 
+def test_load_gsm8k_dataset_zero_samples_skips_download(mocker) -> None:
+    mock_load = mocker.patch("vrollout.datasets.load_dataset")
+
+    samples = datasets.load_gsm8k_dataset(num_samples=0)
+
+    assert samples == []
+    mock_load.assert_not_called()
+
+
 def test_load_gsm8k_dataset_raw_prompts_when_template_none(mocker) -> None:
     mock_rows = [{"question": "What is 5 x 5?", "answer": "25\n#### 25"}]
     mocker.patch(

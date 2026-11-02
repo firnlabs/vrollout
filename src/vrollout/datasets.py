@@ -42,6 +42,9 @@ def load_gsm8k_dataset(
     Returns:
         List of (prompt, answer) string tuples.
     """
+    # HF rejects empty slices like "train[:0]"; eval-only runs request no train data
+    if num_samples == 0:
+        return []
     target_split = f"{split}[:{num_samples}]" if num_samples is not None else split
     ds = load_dataset("openai/gsm8k", "main", split=target_split)
     return [
