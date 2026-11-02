@@ -14,7 +14,7 @@ This repository is an educational reference implementation to study and benchmar
 
 Post-training foundation models with reinforcement learning (e.g. PPO, GRPO) introduces severe tension between memory-bound autoregressive token generation and compute-bound model training. Running both within a monolithic loop creates CUDA memory fragmentation and GPU idle bubbles while trainers wait for completion tokens to be available.
 
-`vRollout` resolves this tension by decoupling token generation, reward evaluation, and policy updates into isolated asynchronous actors communicating across bounded queues and Ray's Plasma object store for zero-copy weight synchronization.
+`vRollout` resolves this tension by decoupling token generation, reward evaluation, and policy updates into isolated asynchronous actors communicating across bounded queues. After each policy update, rank 0 gathers the full FSDP2 parameters and sends them to the rollout workers through Ray's object store; each worker stages them as safetensors in shared memory (`/dev/shm`) and reloads them in place inside vLLM.
 
 ```mermaid
 flowchart LR
@@ -22,7 +22,7 @@ flowchart LR
     B --> C["Async Reward Verifier\nRule-based (#### extraction)"]
     C --> D["Distributed Collator\nGRPO Advantage: (R - μ) / σ"]
     D --> E["Trainer Rank (FSDP2)\nPolicy Loss + KL Penalty"]
-    E -->|Zero-Copy Weight Sync| B
+    E -->|"Weight Sync (Ray object store + /dev/shm)"| B
 ```
 
 ---
@@ -38,7 +38,7 @@ cd vrollout
 uv sync
 ```
 
-### 30-second quickstart (local / CPU)
+### Quickstart (CPU)
 
 Run a distributed 2-rank GRPO training loop on GSM8K locally without requiring a GPU cluster:
 
@@ -129,7 +129,7 @@ Below are the benchmarking results from 2x T4 GPU accelerators in Kaggle Noteboo
 
 ## GSM8K results
 
-The screenshot below shows the training iterations table of a distributed GRPO post-training on `Qwen/Qwen2.5-0.5B-Instruct` on an NVIDIA L4 GPU, alongside the deterministic before-and-after qualitative evaluation.
+The screenshot below shows the training iterations table of a single-GPU GRPO run on `Qwen/Qwen2.5-0.5B-Instruct` on one NVIDIA L4 GPU (trainer and vLLM rollout worker sharing the GPU), alongside the deterministic before-and-after qualitative evaluation. Note that this run predates FSDP2 data-parallel training.
 
 ![vRollout GRPO Training Progress and Qualitative Evaluation](docs/assets/gsm8k-training-eval.png)
 
