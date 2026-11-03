@@ -1,6 +1,7 @@
 """Unit tests for train CLI qualitative table and evaluation rendering."""
 
 from datetime import timedelta
+import random
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,6 +29,24 @@ def _make_scored_rollout(prompt: str, text: str, reward: float) -> scorer.Scored
         ),
         reward=reward,
     )
+
+
+@pytest.mark.parametrize(
+    ("every", "num_iterations", "expected"),
+    [
+        pytest.param(0, 5, [], id="disabled"),
+        pytest.param(2, 5, [2, 4, 5], id="periodic_plus_final"),
+        pytest.param(2, 4, [2, 4], id="final_on_period"),
+    ],
+)
+def test_should_evaluate(every: int, num_iterations: int, expected: list[int]):
+    steps = [
+        step
+        for step in range(1, num_iterations + 1)
+        if train._should_evaluate(step, every, num_iterations)
+    ]
+
+    assert steps == expected
 
 
 def test_format_eval_cell_none() -> None:
@@ -348,6 +367,48 @@ def test_cli_log_sequences_every_rejects_negative() -> None:
     assert isinstance(result.exception, typer.BadParameter)
     assert result.exception.param is not None
     assert result.exception.param.name == "log_sequences_every"
+
+
+def test_cli_checkpoint_flags_accepted(tmp_path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app,
+        [
+            "--seed",
+            "3",
+            "--checkpoint-dir",
+            str(tmp_path),
+            "--checkpoint-every",
+            "5",
+            "--help",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+
+def test_cli_checkpoint_every_rejects_negative() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app, ["--checkpoint-every", "-1"], standalone_mode=False
+    )
+
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "checkpoint_every"
+
+
+def test_seed_all_makes_torch_and_python_rngs_repeatable() -> None:
+    train._seed_all(5)
+    first = (torch.rand(3), random.random())
+
+    train._seed_all(5)
+    second = (torch.rand(3), random.random())
+
+    torch.testing.assert_close(first[0], second[0])
+    assert first[1] == second[1]
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Mapping
 from collections.abc import Sequence
+import dataclasses
 from dataclasses import dataclass
 import itertools
 
@@ -12,6 +13,7 @@ from jaxtyping import Shaped
 import ray
 from ray.actor import ActorClass
 from ray.actor import ActorProxy
+import torch
 from torch import Tensor
 
 from vrollout.testing import MockAsyncLLMEngine
@@ -85,6 +87,7 @@ def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
         max_model_len=config.max_seq_len,
         enforce_eager=config.enforce_eager,
         max_num_seqs=config.max_num_seqs,
+        seed=config.seed if config.seed is not None else 0,
     )
 
 
@@ -107,6 +110,11 @@ class RolloutWorker:
         llm_engine: AsyncLLMEngine | None = None,
     ) -> None:
         self._worker_id = worker_id
+        if config.seed is not None:
+            # distinct per worker so workers don't draw identical sample streams;
+            # torch's RNG drives the mock engine's sampling and weight init
+            config = dataclasses.replace(config, seed=config.seed + worker_id)
+            torch.manual_seed(config.seed)
         self._config = config
         self._llm_engine = (
             _create_llm_engine(self._config) if llm_engine is None else llm_engine

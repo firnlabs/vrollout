@@ -165,6 +165,30 @@ class TestRolloutWorker:
         assert isinstance(worker._llm_engine, AsyncVLLMEngine)
         spy_init.assert_called_once_with(config)
 
+    def test_seed_is_offset_by_worker_id(self, mocker, mock_async_llm_engine):
+        spy_init = mocker.spy(generation, "_create_llm_engine")
+        config = generation.RolloutConfig(model_name="vllm-test-model", seed=10)
+
+        generation.RolloutWorker(3, config, llm_engine=None)
+
+        (worker_config,) = spy_init.call_args.args
+        assert worker_config.seed == 13
+
+    @pytest.mark.asyncio
+    async def test_seeded_mock_workers_are_reproducible(
+        self, sampling_params: types.SamplingParams
+    ):
+        config = types.RolloutConfig(model_name="test-model", seed=0)
+        prompts = ["Prompt 1", "Prompt 2"]
+
+        texts = []
+        for _ in range(2):
+            worker = generation.RolloutWorker(0, config)
+            results = await worker.generate_batch(prompts, sampling_params)
+            texts.append([r.text for r in results])
+
+        assert texts[0] == texts[1]
+
     def test_explicit_vllm_backend_overrides_test_prefix(self, mock_async_llm_engine):
         config = generation.RolloutConfig(
             model_name="test-model",

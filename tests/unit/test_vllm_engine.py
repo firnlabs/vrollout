@@ -120,6 +120,7 @@ class TestAsyncVLLMEngine:
             max_model_len=512,
             enforce_eager=False,
             max_num_seqs=128,
+            seed=42,
         )
 
         mock_args.assert_called_once_with(
@@ -129,6 +130,7 @@ class TestAsyncVLLMEngine:
             max_model_len=512,
             enforce_eager=False,
             max_num_seqs=128,
+            seed=42,
             distributed_executor_backend="mp",
         )
 
@@ -150,6 +152,7 @@ class TestAsyncVLLMEngine:
             max_model_len=512,
             enforce_eager=True,
             max_num_seqs=None,
+            seed=0,
             distributed_executor_backend="uni",
         )
 

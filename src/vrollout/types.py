@@ -93,16 +93,38 @@ class AsyncLLMEngine(Protocol):
 
 @dataclass
 class RolloutConfig:
-    """Configuration for distributed rollout generation."""
+    """Configuration for distributed rollout generation.
+
+    Attributes:
+        model_name: Hugging Face model ID or local path loaded by each worker.
+        backend: Engine backend. `"mock"` forces the mock engine; `None`
+            selects the mock engine when `model_name` starts with `"test"`
+            and vLLM otherwise.
+        num_workers: Number of Ray rollout worker actors to launch.
+        gpus_per_worker: Ray GPU reservation per worker. Fractional values share
+            a GPU across workers; `0.0` schedules workers without GPUs (local
+            testing).
+        max_num_seqs: Maximum number of sequences each vLLM engine schedules at
+            once; `None` uses vLLM's default.
+        max_seq_len: Maximum model context length (prompt plus completion
+            tokens), passed to vLLM as `max_model_len`.
+        gpu_memory_utilization: Fraction of GPU memory vLLM may reserve for
+            weights and KV cache.
+        enforce_eager: Whether vLLM runs in eager mode, skipping CUDA graph
+            capture for faster startup at the cost of throughput.
+        seed: Base sampling seed. Each worker offsets it by its worker ID so
+            workers draw distinct samples; `None` leaves RNGs unseeded.
+    """
 
     model_name: str = "test-model"
     backend: str | None = None
     num_workers: int = 2
-    gpus_per_worker: float = 0.0  # default 0.0 for local testing
+    gpus_per_worker: float = 0.0
     max_num_seqs: int | None = None
     max_seq_len: int = 512
     gpu_memory_utilization: float = 0.60
     enforce_eager: bool = True
+    seed: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

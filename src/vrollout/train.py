@@ -7,6 +7,8 @@ os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
 import asyncio
 from dataclasses import dataclass
 import datetime
+import pathlib
+import random
 import time
 from typing import Any
 
@@ -20,6 +22,7 @@ from torch.distributed import device_mesh
 import typer
 
 from vrollout import buffer
+from vrollout import checkpoint
 from vrollout import datasets
 from vrollout import engine
 from vrollout import generation
@@ -81,6 +84,27 @@ def _create_models(
     return actor, reference
 
 
+def _seed_all(seed: int) -> None:
+    """Seeds the Python and torch (CPU and CUDA) RNGs of this process."""
+    random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def _save_checkpoint(
+    actor: nn.Module, path: pathlib.Path, rank: int, model_name: str, backend: str
+) -> pathlib.Path | None:
+    """Saves the actor on rank 0, with the tokenizer so vLLM can load the directory."""
+    saved_path = checkpoint.save_checkpoint(actor, path, rank)
+    if saved_path is not None and backend != "mock":
+        from transformers import AutoTokenizer  # type: ignore[import-untyped]
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer is None:
+            raise ValueError(f"No tokenizer found for {model_name}")
+        tokenizer.save_pretrained(saved_path)
+    return saved_path
+
+
 def _init_distributed(device: torch.device, timeout: datetime.timedelta) -> None:
     """Initializes the default process group unless one already exists."""
     if dist.is_initialized():
@@ -114,6 +138,20 @@ def _run_evaluation(
         return 0.0, []
     mean_reward = sum(sr.reward for sr in scored_eval) / len(scored_eval)
     return mean_reward, scored_eval
+
+
+def _should_evaluate(step: int, every: int, num_iterations: int) -> bool:
+    """Returns whether to evaluate after 1-indexed `step`: every N steps, and the last.
+
+    Args:
+        step: The 1-indexed training iteration that just finished.
+        every: Evaluate every `every` iterations; 0 disables evaluation.
+        num_iterations: Total number of training iterations.
+
+    Returns:
+        True if evaluation should run after `step`.
+    """
+    return every > 0 and (step % every == 0 or step == num_iterations)
 
 
 def _format_eval_cell(
@@ -307,9 +345,25 @@ def main(
             "finish reason every N iterations (0 to disable)"
         ),
     ),
+    seed: int = typer.Option(
+        0, help="Seed for torch, Python and rollout sampling (offset per worker)"
+    ),
+    checkpoint_dir: str | None = typer.Option(
+        None,
+        help=(
+            "Directory for actor checkpoints, saved as step-<N> subdirectories "
+            "(disabled when unset)"
+        ),
+    ),
+    checkpoint_every: int = typer.Option(
+        0,
+        min=0,
+        help="Save a checkpoint every N iterations (0 saves only after the last one)",
+    ),
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
     console = rich_console.Console()
+    _seed_all(seed)
 
     eval_completion_len = eval_max_tokens if eval_max_tokens is not None else max_tokens
 
@@ -401,9 +455,24 @@ def main(
                     "eval_every": eval_every,
                     "num_eval_prompts": num_eval_prompts,
                     "eval_max_tokens": eval_completion_len,
+                    "max_tokens": max_tokens,
+                    "max_seq_len": max_seq_len,
+                    "temperature": temperature,
                     "lr": lr,
                     "beta": beta,
                     "clip_eps": clip_eps,
+                    "max_grad_norm": max_grad_norm,
+                    "micro_batch_size": micro_batch_size,
+                    "logit_chunk_size": logit_chunk_size,
+                    "prompt_template": prompt_template,
+                    "format_target": format_target,
+                    "strict_format": strict_format,
+                    "num_rollout_workers": num_rollout_workers,
+                    "gpus_per_worker": gpus_per_worker,
+                    "gpu_memory_utilization": gpu_memory_utilization,
+                    "enforce_eager": enforce_eager,
+                    "seed": seed,
+                    "checkpoint_dir": checkpoint_dir,
                     "fsdp": shard_models,
                     "world_size": world_size,
                 },
@@ -482,6 +551,7 @@ def main(
             gpu_memory_utilization=gpu_memory_utilization,
             max_num_seqs=max_num_seqs,
             enforce_eager=enforce_eager,
+            seed=seed,
         )
         rollout_manager = generation.RolloutManager(rollout_config)
         rollout_pipeline = pipeline.RolloutPipeline(rollout_manager, verifier_fn)
@@ -605,7 +675,11 @@ def main(
         eval_reward: float | None = None
         eval_format_rate: float | None = None
         eval_time_s: float | None = None
-        if rank == 0 and eval_every > 0 and (it + 1) % eval_every == 0 and eval_prompts:
+        if (
+            rank == 0
+            and eval_prompts
+            and _should_evaluate(it + 1, eval_every, num_iterations)
+        ):
             assert rollout_pipeline is not None
             t_eval = time.perf_counter()
             eval_reward, final_eval_rollouts = _run_evaluation(
@@ -615,6 +689,20 @@ def main(
                 final_eval_rollouts, target_format=format_target
             )
             eval_time_s = time.perf_counter() - t_eval
+
+        # every rank must enter: gathering FSDP2 shards is a collective
+        if checkpoint_dir is not None and checkpoint.should_checkpoint(
+            it + 1, checkpoint_every, num_iterations
+        ):
+            saved = _save_checkpoint(
+                actor,
+                pathlib.Path(checkpoint_dir) / f"step-{it + 1}",
+                rank,
+                model_name,
+                backend,
+            )
+            if saved is not None:
+                console.print(f"[dim]Saved checkpoint:[/dim] {saved}")
 
         # metric reporting on rank 0
         if rank == 0:
