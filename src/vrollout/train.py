@@ -6,37 +6,31 @@ os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
-from datetime import timedelta
+import datetime
 import time
 from typing import Any
 
-from rich.console import Console
-from rich.table import Table
+from rich import console as rich_console
+from rich import table as rich_table
 import torch
 from torch import distributed as dist
 from torch import nn
 from torch import optim
-from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed import device_mesh
 import typer
 
+from vrollout import buffer
+from vrollout import datasets
+from vrollout import engine
 from vrollout import generation
+from vrollout import metrics
 from vrollout import pipeline
 from vrollout import placement
 from vrollout import scorer
 from vrollout import sharding
 from vrollout import types
-from vrollout.datasets import DEFAULT_GSM8K_PROMPT_TEMPLATE
-from vrollout.datasets import load_gsm8k_dataset
-from vrollout.datasets import load_synthetic_dataset
-from vrollout.engine import DistributedRLEngine
-from vrollout.engine import RLEngineConfig
+from vrollout import verifiers
 from vrollout.testing import models
-from vrollout.verifiers import check_format_compliance
-from vrollout.verifiers import compute_format_compliance_rate
-from vrollout.verifiers import extract_numerical_answer
-from vrollout.verifiers import GSM8KVerifier
-from vrollout.verifiers import synthetic_verifier
 
 app = typer.Typer(pretty_exceptions_enable=False)
 
@@ -87,7 +81,7 @@ def _create_models(
     return actor, reference
 
 
-def _init_distributed(device: torch.device, timeout: timedelta) -> None:
+def _init_distributed(device: torch.device, timeout: datetime.timedelta) -> None:
     """Initializes the default process group unless one already exists."""
     if dist.is_initialized():
         return
@@ -135,9 +129,11 @@ def _format_eval_cell(
         if sr.reward >= 0.5
         else f"[red]✗ ({sr.reward:.1f})[/red]"
     )
-    compliant = check_format_compliance(sr.trajectory.text, target_format=target_format)
+    compliant = verifiers.check_format_compliance(
+        sr.trajectory.text, target_format=target_format
+    )
     fmt_badge = "[cyan][fmt:✓][/cyan]" if compliant else "[yellow][fmt:✗][/yellow]"
-    pred = extract_numerical_answer(sr.trajectory.text) or "N/A"
+    pred = verifiers.extract_numerical_answer(sr.trajectory.text) or "N/A"
     text = sr.trajectory.text.strip().replace("\n", " ")
     if max_chars > 3 and len(text) > max_chars:
         text = f"...{text[-(max_chars - 3) :]}"
@@ -152,9 +148,9 @@ def _build_qualitative_table(
     max_samples: int = 3,
     max_chars: int = 256,
     target_format: str = "gsm8k",
-) -> Table:
+) -> rich_table.Table:
     """Builds a side-by-side table comparing baseline and final eval completions."""
-    sample_table = Table(
+    sample_table = rich_table.Table(
         "Prompt",
         "Ground Truth",
         "Before (Iter 0)",
@@ -176,7 +172,7 @@ def _build_qualitative_table(
 
     for prompt in sorted_prompts[:max_samples]:
         gt_raw = prompt_to_ans.get(prompt, "")
-        gt_ans = extract_numerical_answer(gt_raw) or gt_raw
+        gt_ans = verifiers.extract_numerical_answer(gt_raw) or gt_raw
         sample_table.add_row(
             prompt,
             str(gt_ans),
@@ -200,7 +196,11 @@ def main(
     backend: str = typer.Option("mock", help="Engine backend: 'mock' or 'vllm'"),
     dataset: str = typer.Option("synthetic", help="Dataset: 'synthetic' or 'gsm8k'"),
     group_size: int = typer.Option(
-        4, "--group-size", "-G", help="Number of completions per prompt for GRPO"
+        4,
+        "--group-size",
+        "-G",
+        min=1,
+        help="Number of completions per prompt for GRPO",
     ),
     num_prompts: int = typer.Option(4, help="Number of prompts per iteration"),
     num_iterations: int = typer.Option(
@@ -283,7 +283,7 @@ def main(
         1.0, help="Maximum gradient norm for training"
     ),
     prompt_template: str = typer.Option(
-        DEFAULT_GSM8K_PROMPT_TEMPLATE,
+        datasets.DEFAULT_GSM8K_PROMPT_TEMPLATE,
         "--prompt-template",
         help="Reasoning prompt template with {question} placeholder for GSM8K",
     ),
@@ -299,9 +299,17 @@ def main(
         "--strict-format",
         help="Whether reward scoring strictly enforces answer format tags",
     ),
+    log_sequences_every: int = typer.Option(
+        10,
+        min=0,
+        help=(
+            "Log a W&B table of per-sequence group, reward, advantage, length and "
+            "finish reason every N iterations (0 to disable)"
+        ),
+    ),
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
-    console = Console()
+    console = rich_console.Console()
 
     eval_completion_len = eval_max_tokens if eval_max_tokens is not None else max_tokens
 
@@ -312,7 +320,7 @@ def main(
     else:
         device = torch.device("cpu")
 
-    _init_distributed(device, timedelta(minutes=dist_timeout_minutes))
+    _init_distributed(device, datetime.timedelta(minutes=dist_timeout_minutes))
 
     # prevent Ray and vLLM child processes from inheriting torchelastic agent store
     os.environ["TORCHELASTIC_USE_AGENT_STORE"] = "False"
@@ -366,12 +374,14 @@ def main(
 
     # initialize Weights & Biases on rank 0 if requested
     wandb_run = None
+    wandb_table: Any = None
     if rank == 0 and use_wandb:
         try:
             import wandb as wb  # type: ignore[import-not-found]
 
+            wandb_table = wb.Table
             short_model = model_name.split("/")[-1]
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             resolved_run_name = (
                 wandb_run_name
                 if wandb_run_name is not None
@@ -405,7 +415,7 @@ def main(
     actor, reference = _create_models(model_name, backend, device)
     if shard_models:
         # shard before creating the optimizer: fully_shard swaps parameters for DTensors
-        mesh = init_device_mesh(device.type, (world_size,))
+        mesh = device_mesh.init_device_mesh(device.type, (world_size,))
         actor = sharding.shard_model(actor, mesh)
         reference = sharding.shard_model(reference, mesh)
     optimizer = optim.AdamW(actor.parameters(), lr=lr)
@@ -428,13 +438,13 @@ def main(
             else prompt_template
         )
         if dataset == "gsm8k":
-            data = load_gsm8k_dataset(
+            data = datasets.load_gsm8k_dataset(
                 num_samples=total_prompts_needed,
                 split="train",
                 prompt_template=effective_template,
             )
             eval_data = (
-                load_gsm8k_dataset(
+                datasets.load_gsm8k_dataset(
                     num_samples=num_eval_prompts,
                     split="test",
                     prompt_template=effective_template,
@@ -443,18 +453,20 @@ def main(
                 else []
             )
         else:
-            data = load_synthetic_dataset(num_samples=total_prompts_needed, seed=42)
+            data = datasets.load_synthetic_dataset(
+                num_samples=total_prompts_needed, seed=42
+            )
             eval_data = (
-                load_synthetic_dataset(num_samples=num_eval_prompts, seed=43)
+                datasets.load_synthetic_dataset(num_samples=num_eval_prompts, seed=43)
                 if run_eval
                 else []
             )
 
         prompt_to_ans = {p: a for p, a in data + eval_data}
         verifier_fn = (
-            synthetic_verifier
+            verifiers.synthetic_verifier
             if dataset == "synthetic" and backend == "mock"
-            else GSM8KVerifier(prompt_to_ans, strict_format=strict_format)
+            else verifiers.GSM8KVerifier(prompt_to_ans, strict_format=strict_format)
         )
 
         all_prompts = [p for p, _ in data]
@@ -484,7 +496,7 @@ def main(
         group_size=group_size,
     )
 
-    engine_config = RLEngineConfig(
+    engine_config = engine.RLEngineConfig(
         beta=beta,
         clip_eps=clip_eps,
         group_size=group_size,
@@ -498,7 +510,7 @@ def main(
         ),
     )
 
-    dist_engine = DistributedRLEngine(
+    dist_engine = engine.DistributedRLEngine(
         actor=actor,
         reference=reference,
         optimizer=optimizer,
@@ -509,13 +521,15 @@ def main(
     )
 
     # metric tracking table
-    table = Table(
+    table = rich_table.Table(
         "Iteration",
         "Loss",
         "KL Div",
         "Clip Frac",
         "Mean Reward",
         "Format Compliance Rate",
+        "Resp Len",
+        "Zero-Adv Groups",
         "Eval Reward",
         "Time (s)",
         title="GRPO training progress",
@@ -531,7 +545,7 @@ def main(
         eval_reward0, baseline_eval_rollouts = _run_evaluation(
             rollout_pipeline, eval_prompts, eval_completion_len
         )
-        eval_format0 = compute_format_compliance_rate(
+        eval_format0 = verifiers.compute_format_compliance_rate(
             baseline_eval_rollouts, target_format=format_target
         )
         final_eval_rollouts = baseline_eval_rollouts
@@ -543,6 +557,8 @@ def main(
             "-",
             "-",
             f"{eval_format0:.1%}",
+            "-",
+            "-",
             f"{eval_reward0:.3f}",
             f"{eval0_elapsed:.2f}s",
         )
@@ -573,7 +589,7 @@ def main(
         scored_rollouts = container[0]
 
         # train step on rank local batch & broadcast weights from rank 0
-        metrics = dist_engine.train_iteration(scored_rollouts, device=device)
+        train_metrics = dist_engine.train_iteration(scored_rollouts, device=device)
 
         # periodic evaluation on held-out prompts (rank 0)
         eval_reward: float | None = None
@@ -583,7 +599,7 @@ def main(
             eval_reward, final_eval_rollouts = _run_evaluation(
                 rollout_pipeline, eval_prompts, eval_completion_len
             )
-            eval_format_rate = compute_format_compliance_rate(
+            eval_format_rate = verifiers.compute_format_compliance_rate(
                 final_eval_rollouts, target_format=format_target
             )
 
@@ -593,38 +609,56 @@ def main(
         if rank == 0:
             rewards = [sr.reward for sr in scored_rollouts]
             mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
-            train_format_rate = compute_format_compliance_rate(
+            train_format_rate = verifiers.compute_format_compliance_rate(
                 scored_rollouts, target_format=format_target
             )
             eval_reward_str = f"{eval_reward:.3f}" if eval_reward is not None else "-"
             format_rate_str = f"{train_format_rate:.1%}"
             if eval_format_rate is not None:
                 format_rate_str = f"{train_format_rate:.1%} / {eval_format_rate:.1%}"
+            advantages = buffer.compute_global_advantages(scored_rollouts, group_size)
+            rollout_stats = metrics.compute_rollout_metrics(
+                scored_rollouts, advantages, group_size
+            )
+            zero_adv = rollout_stats.zero_advantage_group_frac
 
             table.add_row(
                 str(it + 1),
-                f"{metrics.avg_loss:.4f}",
-                f"{metrics.avg_kl:.4f}",
-                f"{metrics.avg_clip_fraction:.2%}",
+                f"{train_metrics.avg_loss:.4f}",
+                f"{train_metrics.avg_kl:.4f}",
+                f"{train_metrics.avg_clip_fraction:.2%}",
                 f"{mean_reward:.3f}",
                 format_rate_str,
+                f"{rollout_stats.response_length_mean:.0f}",
+                f"{zero_adv:.0%}" if zero_adv is not None else "-",
                 eval_reward_str,
                 f"{elapsed:.2f}s",
             )
 
             if wandb_run:
-                log_payload: dict[str, float] = {
-                    "loss": metrics.avg_loss,
-                    "kl": metrics.avg_kl,
-                    "clip_fraction": metrics.avg_clip_fraction,
+                log_payload: dict[str, Any] = {
+                    "loss": train_metrics.avg_loss,
+                    "kl": train_metrics.avg_kl,
+                    "clip_fraction": train_metrics.avg_clip_fraction,
                     "reward_mean": mean_reward,
                     "format_compliance_rate": train_format_rate,
                     "step_time_s": elapsed,
+                    **rollout_stats.to_dict(),
                 }
                 if eval_reward is not None:
                     log_payload["eval_reward_mean"] = eval_reward
                 if eval_format_rate is not None:
                     log_payload["eval_format_compliance_rate"] = eval_format_rate
+                if log_sequences_every > 0 and (it + 1) % log_sequences_every == 0:
+                    log_payload["sequences"] = wandb_table(
+                        columns=list(metrics.SEQUENCE_COLUMNS),
+                        data=[
+                            row.to_list()
+                            for row in metrics.sequence_rows(
+                                scored_rollouts, advantages, group_size
+                            )
+                        ],
+                    )
                 wandb_run.log(log_payload, step=it + 1)
 
     if rank == 0:
