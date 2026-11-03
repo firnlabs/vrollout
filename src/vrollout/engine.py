@@ -1,6 +1,7 @@
 """Distributed RL training engine coordinating rollout batching and weight broadcast."""
 
 from dataclasses import dataclass
+import time
 
 import torch
 from torch import distributed as dist
@@ -67,6 +68,10 @@ class TrainIterationMetrics:
         avg_mismatch_kl: Mean per-token k3 estimate of KL(pi_old || pi) between
             the old and current policies.
         avg_grad_norm: Global L2 gradient norm before clipping.
+        train_time_s: Wall-clock seconds spent across all train steps in the
+            iteration.
+        weight_sync_time_s: Wall-clock seconds spent extracting and broadcasting
+            actor weights to the rollout receivers.
     """
 
     avg_loss: float
@@ -76,6 +81,8 @@ class TrainIterationMetrics:
     avg_logprob_abs_diff: float = 0.0
     avg_mismatch_kl: float = 0.0
     avg_grad_norm: float = 0.0
+    train_time_s: float = 0.0
+    weight_sync_time_s: float = 0.0
 
 
 def _mean(values: list[float]) -> float:
@@ -143,12 +150,16 @@ class DistributedRLEngine:
             rank=self._rank, world_size=self._world_size, device=device
         )
 
+        t_train = time.perf_counter()
         metrics_list = []
         for _ in range(self._config.train_steps_per_iteration):
             metrics = self._trainer.train_step(local_batch)
             metrics_list.append(metrics)
+        train_time_s = time.perf_counter() - t_train
 
+        t_sync = time.perf_counter()
         self._broadcaster.extract_and_broadcast(self._actor)
+        weight_sync_time_s = time.perf_counter() - t_sync
 
         return TrainIterationMetrics(
             avg_loss=_mean([m.loss for m in metrics_list]),
@@ -158,4 +169,6 @@ class DistributedRLEngine:
             avg_logprob_abs_diff=_mean([m.logprob_abs_diff for m in metrics_list]),
             avg_mismatch_kl=_mean([m.mismatch_kl for m in metrics_list]),
             avg_grad_norm=_mean([m.grad_norm for m in metrics_list]),
+            train_time_s=train_time_s,
+            weight_sync_time_s=weight_sync_time_s,
         )

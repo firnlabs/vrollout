@@ -1,5 +1,6 @@
 from collections.abc import Callable
 import math
+import time
 
 import pytest
 from torch import optim
@@ -55,6 +56,28 @@ class TestDistributedRLEngine:
         assert metrics.rank == (rank or 0)
         assert dist_engine._world_size == (world_size or 1)
         assert dist_engine._receivers == []
+
+    def test_train_iteration_times_weight_sync_separately(
+        self, actor_model, ref_model, scored_rollouts: list[ScoredRollout]
+    ):
+        sync_delay_s = 0.2
+
+        class _SlowReceiver:
+            def update_weights(self, weights) -> None:
+                _ = weights  # unused
+                time.sleep(sync_delay_s)
+
+        dist_engine = DistributedRLEngine(
+            actor=actor_model,
+            reference=ref_model,
+            optimizer=optim.AdamW(actor_model.parameters()),
+            receivers=[_SlowReceiver()],
+        )
+
+        metrics = dist_engine.train_iteration(scored_rollouts)
+
+        assert metrics.weight_sync_time_s >= sync_delay_s
+        assert 0.0 < metrics.train_time_s < sync_delay_s
 
     def test_error_train_iteration(self, engine_builder):
         dist_engine = engine_builder()
