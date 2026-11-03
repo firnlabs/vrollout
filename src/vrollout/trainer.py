@@ -1,5 +1,7 @@
 """Policy gradient optimization with reference model regularization."""
 
+from dataclasses import dataclass
+
 from beartype import beartype
 from jaxtyping import Float
 from jaxtyping import Int
@@ -10,11 +12,40 @@ from torch import nn
 from torch import optim
 from torch import Tensor
 from torch.distributed import fsdp
+from torch.distributed.tensor import DTensor
 from torch.utils import checkpoint
 
 from vrollout import buffer as vb
 from vrollout import grpo
 from vrollout.buffer import DistributedBatch
+
+
+@dataclass(frozen=True, slots=True)
+class TrainStepMetrics:
+    """Loss and diagnostic metrics for one optimizer step, averaged over all tokens.
+
+    Token-level metrics are means over all completion tokens in the batch, across all
+    microbatches and, under data parallelism, across all ranks.
+
+    Attributes:
+        loss: GRPO loss.
+        mean_kl: k3 estimate of KL(pi || pi_ref) between the current and reference
+            policies.
+        clip_fraction: Fraction of tokens whose importance ratio pi / pi_old fell
+            outside `[1 - clip_eps, 1 + clip_eps]`.
+        logprob_abs_diff: Mean of `|log pi - log pi_old|`, the log-prob gap between
+            the current policy and the old policy that generated the batch.
+        mismatch_kl: k3 estimate of KL(pi_old || pi), using pi_old as the sampling
+            policy.
+        grad_norm: Global L2 norm of the actor gradient before clipping.
+    """
+
+    loss: float
+    mean_kl: float
+    clip_fraction: float
+    logprob_abs_diff: float
+    mismatch_kl: float
+    grad_norm: float
 
 
 def _get_target_log_probs(
@@ -97,7 +128,7 @@ class ModelTrainer:
         )
 
     @jaxtyped(typechecker=beartype)
-    def train_step(self, dist_batch: DistributedBatch) -> grpo.GRPOLossMetrics:
+    def train_step(self, dist_batch: DistributedBatch) -> TrainStepMetrics:
         """Executes optimization step computing GRPO loss with KL penalty."""
         completion_mask = dist_batch.loss_mask[:, 1:]
         local_tokens = completion_mask.sum().to(torch.float32)
@@ -132,11 +163,15 @@ class ModelTrainer:
                 for mb in microbatches
             ]
 
-        # actor model forward, loss, and gradient step
+        # actor model forward, loss, and gradient step. Every microbatch's forward runs
+        # before the optimizer step, so the log-prob mismatch metrics compare the
+        # sampler with the same weights that generated the batch (staleness 0).
         self._optimizer.zero_grad()
         accum_loss = 0.0
         accum_kl = 0.0
         accum_clip_frac = 0.0
+        accum_lp_diff = 0.0
+        accum_mismatch_kl = 0.0
 
         for mb, ref_lps in zip(microbatches, ref_logprobs_list, strict=True):
             with self._autocast():
@@ -158,11 +193,16 @@ class ModelTrainer:
             accum_loss += loss.item()
             accum_kl += metrics.mean_kl
             accum_clip_frac += metrics.clip_fraction
+            accum_lp_diff += metrics.logprob_abs_diff
+            accum_mismatch_kl += metrics.mismatch_kl
 
-        if self._max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                self._actor.parameters(), self._max_grad_norm
-            )
+        # an infinite max norm leaves gradients unchanged but still returns the norm
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self._actor.parameters(),
+            self._max_grad_norm if self._max_grad_norm is not None else float("inf"),
+        )
+        if isinstance(grad_norm, DTensor):
+            grad_norm = grad_norm.full_tensor()
 
         self._optimizer.step()
 
@@ -175,16 +215,31 @@ class ModelTrainer:
             # - sum_all: sum of per-token metrics across all ranks
             device = local_tokens.device
             stats = torch.tensor(
-                [accum_loss, accum_kl, accum_clip_frac],
+                [
+                    accum_loss,
+                    accum_kl,
+                    accum_clip_frac,
+                    accum_lp_diff,
+                    accum_mismatch_kl,
+                ],
                 dtype=torch.float32,
                 device=device,
             )
             dist.all_reduce(stats, op=dist.ReduceOp.SUM)
             stats /= world_size
-            accum_loss, accum_kl, accum_clip_frac = stats.tolist()
+            (
+                accum_loss,
+                accum_kl,
+                accum_clip_frac,
+                accum_lp_diff,
+                accum_mismatch_kl,
+            ) = stats.tolist()
 
-        return grpo.GRPOLossMetrics(
+        return TrainStepMetrics(
             loss=accum_loss,
             mean_kl=accum_kl,
             clip_fraction=accum_clip_frac,
+            logprob_abs_diff=accum_lp_diff,
+            mismatch_kl=accum_mismatch_kl,
+            grad_norm=grad_norm.item(),
         )

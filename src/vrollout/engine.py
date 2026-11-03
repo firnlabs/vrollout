@@ -18,7 +18,25 @@ from vrollout.types import WorldSize
 
 @dataclass(frozen=True)
 class RLEngineConfig:
-    """Configuration for distributed RL training iterations."""
+    """Configuration for distributed RL training iterations.
+
+    Attributes:
+        pad_token_id: Token ID used to right-pad rollouts to a common length.
+        beta: Coefficient of the KL penalty against the reference policy.
+        clip_eps: Clipping range epsilon for the PPO-style importance ratio.
+        group_size: Number of rollouts sampled per prompt; rewards are normalized
+            within each group to compute advantages when greater than 1.
+        train_steps_per_iteration: Number of optimizer steps taken on the same
+            rank-local batch per iteration.
+        micro_batch_size: Number of sequences per gradient accumulation
+            micro-batch.
+        logit_chunk_size: Sequence chunk length used when computing log-probs to
+            bound peak logit memory.
+        max_grad_norm: Maximum global L2 gradient norm for clipping, or None to
+            disable clipping.
+        autocast_dtype: Dtype for autocast in the forward pass, or None to run in
+            the model's native precision.
+    """
 
     pad_token_id: int = 0
     beta: float = 0.04
@@ -33,12 +51,35 @@ class RLEngineConfig:
 
 @dataclass(frozen=True)
 class TrainIterationMetrics:
-    """Per-rank training metrics for a single optimization iteration."""
+    """Training metrics for a single optimization iteration, as reported by `rank`.
+
+    Each 'avg_*' value is averaged over the iteration's train steps.
+
+    Attributes:
+        avg_loss: Mean GRPO loss per completion token.
+        rank: Rank of the process that produced these metrics.
+        avg_kl: Mean per-token KL divergence between the actor and the reference
+            policy.
+        avg_clip_fraction: Fraction of completion tokens whose importance ratio
+            fell outside ``[1 - clip_eps, 1 + clip_eps]``.
+        avg_logprob_abs_diff: Mean per-token absolute difference between the
+            current policy's and the old policy's log-probs.
+        avg_mismatch_kl: Mean per-token k3 estimate of KL(pi_old || pi) between
+            the old and current policies.
+        avg_grad_norm: Global L2 gradient norm before clipping.
+    """
 
     avg_loss: float
     rank: int
     avg_kl: float = 0.0
     avg_clip_fraction: float = 0.0
+    avg_logprob_abs_diff: float = 0.0
+    avg_mismatch_kl: float = 0.0
+    avg_grad_norm: float = 0.0
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
 
 
 class DistributedRLEngine:
@@ -109,25 +150,12 @@ class DistributedRLEngine:
 
         self._broadcaster.extract_and_broadcast(self._actor)
 
-        avg_loss = (
-            sum(m.loss for m in metrics_list) / len(metrics_list)
-            if metrics_list
-            else 0.0
-        )
-        avg_kl = (
-            sum(m.mean_kl for m in metrics_list) / len(metrics_list)
-            if metrics_list
-            else 0.0
-        )
-        avg_clip_fraction = (
-            sum(m.clip_fraction for m in metrics_list) / len(metrics_list)
-            if metrics_list
-            else 0.0
-        )
-
         return TrainIterationMetrics(
-            avg_loss=avg_loss,
+            avg_loss=_mean([m.loss for m in metrics_list]),
             rank=self._rank,
-            avg_kl=avg_kl,
-            avg_clip_fraction=avg_clip_fraction,
+            avg_kl=_mean([m.mean_kl for m in metrics_list]),
+            avg_clip_fraction=_mean([m.clip_fraction for m in metrics_list]),
+            avg_logprob_abs_diff=_mean([m.logprob_abs_diff for m in metrics_list]),
+            avg_mismatch_kl=_mean([m.mismatch_kl for m in metrics_list]),
+            avg_grad_norm=_mean([m.grad_norm for m in metrics_list]),
         )

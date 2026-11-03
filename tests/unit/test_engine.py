@@ -49,6 +49,9 @@ class TestDistributedRLEngine:
         assert math.isfinite(metrics.avg_loss)
         assert math.isfinite(metrics.avg_kl)
         assert 0.0 <= metrics.avg_clip_fraction <= 1.0
+        assert metrics.avg_logprob_abs_diff >= 0.0
+        assert metrics.avg_mismatch_kl >= 0.0
+        assert metrics.avg_grad_norm > 0.0
         assert metrics.rank == (rank or 0)
         assert dist_engine._world_size == (world_size or 1)
         assert dist_engine._receivers == []

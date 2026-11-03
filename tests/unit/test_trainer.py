@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 import copy
+import dataclasses
 import functools
 import math
 from typing import Callable
@@ -186,7 +187,7 @@ def _run_train_step(
     batch: DistributedBatch,
     microbatch_size: int | None,
     logit_chunk_size: int,
-) -> tuple[tr.grpo.GRPOLossMetrics, dict[str, Tensor], dict[str, Tensor]]:
+) -> tuple[tr.TrainStepMetrics, dict[str, Tensor], dict[str, Tensor]]:
     actor = copy.deepcopy(actor_base)
     optimizer = optim.AdamW(actor.parameters(), lr=1e-3)
     trainer = tr.ModelTrainer(
@@ -238,3 +239,61 @@ def test_train_step_microbatch_chunk_equivalence(
     )
     _assert_params_equal(list(mb_grads.items()), list(full_grads.items()))
     _assert_params_equal(list(mb_params.items()), list(full_params.items()))
+
+
+def _grad_norm(model: nn.Module) -> float:
+    grads = [p.grad for p in model.parameters() if p.grad is not None]
+    return torch.linalg.vector_norm(torch.stack([g.norm() for g in grads])).item()
+
+
+@pytest.mark.parametrize(
+    "max_grad_norm",
+    [pytest.param(None, id="unclipped"), pytest.param(1e-4, id="clipped")],
+)
+def test_train_step_reports_pre_clip_grad_norm(
+    create_batch: Callable[[], DistributedBatch],
+    actor_model: ToyModel,
+    ref_model: ToyModel,
+    max_grad_norm: float | None,
+) -> None:
+    trainer = tr.ModelTrainer(
+        actor=actor_model,
+        reference=ref_model,
+        optimizer=optim.SGD(actor_model.parameters(), lr=0.0),
+        max_grad_norm=max_grad_norm,
+    )
+
+    metrics = trainer.train_step(create_batch())
+
+    applied_norm = _grad_norm(actor_model)
+    assert metrics.grad_norm > 0.0
+    if max_grad_norm is not None:
+        # clip_grad_norm_ scales by max_norm / (total_norm + 1e-6)
+        expected = max_grad_norm * metrics.grad_norm / (metrics.grad_norm + 1e-6)
+        assert applied_norm == pytest.approx(expected, rel=1e-5)
+        assert metrics.grad_norm > applied_norm
+    else:
+        assert metrics.grad_norm == pytest.approx(applied_norm, rel=1e-5)
+
+
+def test_train_step_mismatch_is_zero_when_old_policy_matches_current(
+    create_batch: Callable[[], DistributedBatch],
+    actor_model: ToyModel,
+    ref_model: ToyModel,
+) -> None:
+    batch = create_batch()
+    with torch.no_grad():
+        current_policy_lps = tr._compute_logprobs(actor_model, batch)
+    batch = dataclasses.replace(batch, old_log_probs=current_policy_lps)
+    trainer = tr.ModelTrainer(
+        actor=actor_model,
+        reference=ref_model,
+        optimizer=optim.AdamW(actor_model.parameters(), lr=1e-2),
+        microbatch_size=2,
+    )
+
+    metrics = trainer.train_step(batch)
+
+    assert metrics.logprob_abs_diff == pytest.approx(0.0, abs=1e-6)
+    assert metrics.mismatch_kl == pytest.approx(0.0, abs=1e-6)
+    assert metrics.clip_fraction == 0.0

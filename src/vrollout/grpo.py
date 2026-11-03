@@ -16,9 +16,29 @@ from torch import Tensor
 
 @dataclass(frozen=True, slots=True)
 class GRPOLossMetrics:
+    """Detached scalar metrics from one GRPO loss evaluation.
+
+    Each value is a sum over completion tokens divided by the loss normalizer
+    (`num_valid_tokens`), i.e. a per-token mean when the normalizer is the local
+    token count.
+
+    Attributes:
+        loss: GRPO loss.
+        mean_kl: k3 estimate of KL(pi || pi_ref) between the current and reference
+            policies.
+        clip_fraction: Fraction of tokens whose importance ratio pi / pi_old fell
+            outside `[1 - clip_eps, 1 + clip_eps]`.
+        logprob_abs_diff: Mean of `|log pi - log pi_old|`, the log-prob gap between
+            the trainer (current policy) and the sampler (old policy).
+        mismatch_kl: k3 estimate of KL(pi_old || pi), using pi_old as the sampling
+            policy, measuring sampler-vs-trainer mismatch.
+    """
+
     loss: float
     mean_kl: float
     clip_fraction: float
+    logprob_abs_diff: float
+    mismatch_kl: float
 
 
 def compute_group_advantages(
@@ -102,11 +122,19 @@ def compute_grpo_loss(
         clipped_mask = (ratios < 1 - clip_eps) | (ratios > 1 + clip_eps)
         clip_fraction = (clipped_mask & completion_mask).sum() / total_valid_tokens
         mean_kl = (kl * completion_mask).sum() / total_valid_tokens
+        logprob_abs_diff = (
+            (log_probs - old_log_probs).abs() * completion_mask
+        ).sum() / total_valid_tokens
+        mismatch_kl = (
+            compute_kl_divergence(old_log_probs, log_probs) * completion_mask
+        ).sum() / total_valid_tokens
 
     metrics = GRPOLossMetrics(
         loss=loss.item(),
         mean_kl=mean_kl.item(),
         clip_fraction=clip_fraction.item(),
+        logprob_abs_diff=logprob_abs_diff.item(),
+        mismatch_kl=mismatch_kl.item(),
     )
 
     return loss, metrics
