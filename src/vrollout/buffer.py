@@ -39,9 +39,10 @@ def _get_max_seq_len(scored_rollouts: list[ScoredRollout]) -> int:
     return max_seq_len
 
 
-def _compute_global_advantages(
+def compute_global_advantages(
     scored_rollouts: list[ScoredRollout], group_size: int
 ) -> torch.Tensor:
+    """Computes per-sequence advantages for the whole batch, as used for training."""
     rewards = torch.tensor([sr.reward for sr in scored_rollouts], dtype=torch.float32)
     if group_size > 1 and len(scored_rollouts) % group_size == 0:
         global_advantages = grpo.compute_group_advantages(
@@ -92,7 +93,7 @@ class DistributedRolloutBuffer:
         self._pad_token_id = pad_token_id
         self._group_size = group_size
         self._global_advantages = (
-            _compute_global_advantages(scored_rollouts, group_size)
+            compute_global_advantages(scored_rollouts, group_size)
             if scored_rollouts
             else torch.empty(0, dtype=torch.float32)
         )

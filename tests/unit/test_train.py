@@ -325,6 +325,31 @@ def test_cli_num_iterations_rejects_negative() -> None:
     assert result.exception.param.name == "num_iterations"
 
 
+@pytest.mark.parametrize("group_size", ["0", "-1"])
+def test_cli_group_size_rejects_non_positive(group_size: str) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app, ["--group-size", group_size], standalone_mode=False
+    )
+
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "group_size"
+
+
+def test_cli_log_sequences_every_rejects_negative() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app, ["--log-sequences-every", "-1"], standalone_mode=False
+    )
+
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "log_sequences_every"
+
+
 @pytest.mark.parametrize(
     ("device", "backend", "device_id"),
     [
