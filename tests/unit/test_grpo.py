@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from vrollout import grpo
@@ -42,3 +43,25 @@ def test_compute_grpo_loss():
     assert metrics.loss == exp_loss.item()
     assert metrics.mean_kl == 0.0
     assert metrics.clip_fraction == 0.0
+    assert metrics.logprob_abs_diff == 0.0
+    assert metrics.mismatch_kl == 0.0
+
+
+def test_compute_grpo_loss_sampler_mismatch_metrics():
+    log_probs = torch.full((2, 3), -1.0)
+    old_log_probs = torch.full((2, 3), -1.5)
+    old_log_probs[1, 2] = -10.0  # masked out, must not count
+    mask = torch.ones((2, 3), dtype=torch.bool)
+    mask[1, 2] = False
+
+    _, metrics = grpo.compute_grpo_loss(
+        log_probs,
+        old_log_probs,
+        log_probs.clone(),
+        torch.tensor([1.0, -1.0]),
+        mask,
+    )
+
+    delta = torch.tensor(0.5)
+    assert metrics.logprob_abs_diff == pytest.approx(0.5)
+    assert metrics.mismatch_kl == pytest.approx((torch.expm1(delta) - delta).item())

@@ -160,9 +160,9 @@ def _fsdp_matches_single_process_worker(
     full_batch = _make_batch(vocab_size)
 
     # single-process baseline on the full batch (identical on every rank)
-    local_actor = copy.deepcopy(base_actor)
-    local_metrics = _make_trainer(
-        local_actor, copy.deepcopy(base_ref), max_grad_norm
+    baseline_actor = copy.deepcopy(base_actor)
+    baseline_metrics = _make_trainer(
+        baseline_actor, copy.deepcopy(base_ref), max_grad_norm
     ).train_step(full_batch)
 
     # FSDP2 data parallel: each rank trains on its half of the batch
@@ -174,16 +174,25 @@ def _fsdp_matches_single_process_worker(
         rank_batch
     )
 
-    assert fsdp_metrics.loss == pytest.approx(local_metrics.loss, rel=1e-5, abs=1e-6)
+    assert fsdp_metrics.loss == pytest.approx(baseline_metrics.loss, rel=1e-5, abs=1e-6)
     assert fsdp_metrics.mean_kl == pytest.approx(
-        local_metrics.mean_kl, rel=1e-5, abs=1e-6
+        baseline_metrics.mean_kl, rel=1e-5, abs=1e-6
     )
     assert fsdp_metrics.clip_fraction == pytest.approx(
-        local_metrics.clip_fraction, rel=1e-5, abs=1e-6
+        baseline_metrics.clip_fraction, rel=1e-5, abs=1e-6
+    )
+    assert fsdp_metrics.logprob_abs_diff == pytest.approx(
+        baseline_metrics.logprob_abs_diff, rel=1e-5, abs=1e-6
+    )
+    assert fsdp_metrics.mismatch_kl == pytest.approx(
+        baseline_metrics.mismatch_kl, rel=1e-5, abs=1e-6
+    )
+    assert fsdp_metrics.grad_norm == pytest.approx(
+        baseline_metrics.grad_norm, rel=1e-5, abs=1e-6
     )
 
     for (n1, p1), (n2, p2) in zip(
-        sharded_actor.named_parameters(), local_actor.named_parameters(), strict=True
+        sharded_actor.named_parameters(), baseline_actor.named_parameters(), strict=True
     ):
         assert n1 == n2
         full = p1.full_tensor() if isinstance(p1, DTensor) else p1
@@ -193,7 +202,7 @@ def _fsdp_matches_single_process_worker(
     params_changed = any(
         not torch.allclose(p1.detach(), p2.detach())
         for p1, p2 in zip(
-            local_actor.parameters(), base_actor.parameters(), strict=True
+            baseline_actor.parameters(), base_actor.parameters(), strict=True
         )
     )
     assert params_changed
