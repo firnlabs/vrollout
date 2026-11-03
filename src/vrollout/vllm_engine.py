@@ -26,6 +26,7 @@ class AsyncVLLMEngine:
         max_model_len: int | None = None,
         enforce_eager: bool = True,
         max_num_seqs: int | None = None,
+        seed: int = 0,
     ) -> None:
         self._llm_engine = vllm.AsyncLLMEngine.from_engine_args(
             vllm.AsyncEngineArgs(
@@ -35,6 +36,7 @@ class AsyncVLLMEngine:
                 max_model_len=max_model_len,
                 enforce_eager=enforce_eager,
                 max_num_seqs=max_num_seqs,
+                seed=seed,
                 distributed_executor_backend="uni"
                 if tensor_parallel_size == 1
                 else "mp",
