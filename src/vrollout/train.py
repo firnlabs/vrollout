@@ -531,7 +531,8 @@ def main(
         "Resp Len",
         "Zero-Adv Groups",
         "Eval Reward",
-        "Time (s)",
+        "Step (s)",
+        "Eval (s)",
         title="GRPO training progress",
     )
 
@@ -560,6 +561,7 @@ def main(
             "-",
             "-",
             f"{eval_reward0:.3f}",
+            "-",
             f"{eval0_elapsed:.2f}s",
         )
         if wandb_run:
@@ -567,6 +569,7 @@ def main(
                 {
                     "eval_reward_mean": eval_reward0,
                     "eval_format_compliance_rate": eval_format0,
+                    "eval_time_s": eval0_elapsed,
                 },
                 step=0,
             )
@@ -576,6 +579,7 @@ def main(
 
         # rollout & score on rank 0
         container: list[Any] = [None]
+        rollout_time_s = 0.0
         if rank == 0:
             assert rollout_pipeline is not None
             iter_prompts = all_prompts[it * num_prompts : (it + 1) * num_prompts]
@@ -583,27 +587,34 @@ def main(
                 rollout_pipeline.generate_and_score(iter_prompts, sampling_params)
             )
             container[0] = scored
+            rollout_time_s = time.perf_counter() - t0
 
         # broadcast scored rollouts to all ranks
+        t_bcast = time.perf_counter()
         dist.broadcast_object_list(container, src=0, device=device)
         scored_rollouts = container[0]
+        broadcast_time_s = time.perf_counter() - t_bcast
 
         # train step on rank local batch & broadcast weights from rank 0
         train_metrics = dist_engine.train_iteration(scored_rollouts, device=device)
 
+        # eval is excluded from the step time so steps are comparable across runs
+        step_time_s = time.perf_counter() - t0
+
         # periodic evaluation on held-out prompts (rank 0)
         eval_reward: float | None = None
         eval_format_rate: float | None = None
+        eval_time_s: float | None = None
         if rank == 0 and eval_every > 0 and (it + 1) % eval_every == 0 and eval_prompts:
             assert rollout_pipeline is not None
+            t_eval = time.perf_counter()
             eval_reward, final_eval_rollouts = _run_evaluation(
                 rollout_pipeline, eval_prompts, eval_completion_len
             )
             eval_format_rate = verifiers.compute_format_compliance_rate(
                 final_eval_rollouts, target_format=format_target
             )
-
-        elapsed = time.perf_counter() - t0
+            eval_time_s = time.perf_counter() - t_eval
 
         # metric reporting on rank 0
         if rank == 0:
@@ -632,10 +643,14 @@ def main(
                 f"{rollout_stats.response_length_mean:.0f}",
                 f"{zero_adv:.0%}" if zero_adv is not None else "-",
                 eval_reward_str,
-                f"{elapsed:.2f}s",
+                f"{step_time_s:.2f}s",
+                f"{eval_time_s:.2f}s" if eval_time_s is not None else "-",
             )
 
             if wandb_run:
+                completion_tokens = sum(
+                    len(sr.trajectory.completion_token_ids) for sr in scored_rollouts
+                )
                 log_payload: dict[str, Any] = {
                     "loss": train_metrics.avg_loss,
                     "kl": train_metrics.avg_kl,
@@ -645,13 +660,22 @@ def main(
                     "mismatch_kl": train_metrics.avg_mismatch_kl,
                     "reward_mean": mean_reward,
                     "format_compliance_rate": train_format_rate,
-                    "step_time_s": elapsed,
+                    "step_time_s": step_time_s,
+                    "rollout_time_s": rollout_time_s,
+                    "broadcast_time_s": broadcast_time_s,
+                    "train_time_s": train_metrics.train_time_s,
+                    "weight_sync_time_s": train_metrics.weight_sync_time_s,
+                    "rollout_tokens_per_s": (
+                        completion_tokens / rollout_time_s if rollout_time_s else 0.0
+                    ),
                     **rollout_stats.to_dict(),
                 }
                 if eval_reward is not None:
                     log_payload["eval_reward_mean"] = eval_reward
                 if eval_format_rate is not None:
                     log_payload["eval_format_compliance_rate"] = eval_format_rate
+                if eval_time_s is not None:
+                    log_payload["eval_time_s"] = eval_time_s
                 if log_sequences_every > 0 and (it + 1) % log_sequences_every == 0:
                     log_payload["sequences"] = wandb_table(
                         columns=list(metrics.SEQUENCE_COLUMNS),
