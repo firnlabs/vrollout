@@ -22,6 +22,17 @@ from vrollout.verifiers import verify_math_answer
         pytest.param("There are 5 apples and 10 oranges.", "10", id="standalone"),
         pytest.param("", None, id="empty"),
         pytest.param("No numbers here", None, id="no_numbers"),
+        pytest.param("#### $18", "18", id="hash_tag_dollar"),
+        pytest.param("\\boxed{\\$18}", "18", id="boxed_escaped_dollar"),
+        pytest.param("\\boxed{18 \\text{ apples}}", "18", id="boxed_text_units"),
+        pytest.param("#### 5\nWait, fix: #### 7", "7", id="last_hash_tag"),
+        pytest.param("The answer is 5. No, the answer is 7.", "7", id="last_phrase"),
+        pytest.param("\\boxed{7} then #### 5", "7", id="boxed_outranks_hash_tag"),
+        pytest.param(
+            "So #### 18\nQuestion: Tom has 3 cats. #### 3",
+            "18",
+            id="ignores_follow_up_question",
+        ),
     ],
 )
 def test_extract_numerical_answer(answer: str, expected: str | None) -> None:
@@ -35,6 +46,7 @@ def test_extract_numerical_answer(answer: str, expected: str | None) -> None:
     [
         pytest.param("First step then #### 42", "42", id="formatted"),
         pytest.param("First step then 42", None, id="unformatted"),
+        pytest.param("Done.\nQuestion: next? #### 3", None, id="only_follow_up"),
     ],
 )
 def test_extract_numerical_answer_strict_mode(text: str, expected: str | None) -> None:
@@ -59,6 +71,11 @@ def test_extract_numerical_answer_strict_mode(text: str, expected: str | None) -
         pytest.param("Final: \\boxed{100}", "any", True, id="any_valid_boxed"),
         pytest.param("Final: #### 100", "any", True, id="any_valid_hash"),
         pytest.param("Final: 100", "any", False, id="any_invalid_plain"),
+        pytest.param("Final: #### $18", "gsm8k", True, id="gsm8k_dollar"),
+        pytest.param("Final: \\boxed{\\$18}", "boxed", True, id="boxed_dollar"),
+        pytest.param(
+            "18.\nQuestion: next? #### 3", "gsm8k", False, id="gsm8k_follow_up_only"
+        ),
     ],
 )
 def test_check_format_compliance(text: str, target_format: str, expected: bool) -> None:
@@ -204,8 +221,18 @@ async def test_gsm8k_verifier_stripped_prompt_fallback() -> None:
         pytest.param(
             "Result is \\boxed{42.0}", "#### 42", 1.0, id="boxed_float_equivalent"
         ),
-        pytest.param("Result is 42", "The answer is 43", 0.0, id="mismatch"),
+        pytest.param("Result is 42", "#### 43", 0.0, id="mismatch"),
         pytest.param("Invalid", "#### 42", 0.0, id="invalid_format"),
+        pytest.param("#### $42", "#### 42", 1.0, id="hash_tag_dollar"),
+        pytest.param("\\boxed{\\$42.00}", "#### 42", 1.0, id="boxed_dollar"),
+        pytest.param("\\boxed{1,250}", "#### 1250", 1.0, id="thousands_separator"),
+        pytest.param("\\boxed{5B}", "#### 5", 0.0, id="boxed_glued_suffix"),
+        pytest.param(
+            "Reasoning.\n#### 72",
+            "Natalia sold 48/2 = <<48/2=24>>24 clips.\n#### 72",
+            1.0,
+            id="gsm8k_reference_annotations",
+        ),
     ],
 )
 def test_verify_math_answer(pred: str, gt: str, expected: float) -> None:
@@ -222,7 +249,7 @@ def test_verify_math_answer(pred: str, gt: str, expected: float) -> None:
     ],
 )
 def test_verify_math_answer_strict_format(strict_format: bool, expected: float) -> None:
-    pred_unformatted = "The answer is just 42."
+    pred_unformatted = "So in total it is 42."
     gt = "#### 42"
 
     score = verify_math_answer(pred_unformatted, gt, strict_format=strict_format)
