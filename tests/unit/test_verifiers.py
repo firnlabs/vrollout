@@ -3,6 +3,7 @@
 import pytest
 
 from vrollout import scorer
+from vrollout import verifiers
 from vrollout.types import RolloutTrajectory
 from vrollout.verifiers import check_format_compliance
 from vrollout.verifiers import compute_format_compliance_rate
@@ -91,12 +92,11 @@ def test_check_format_compliance_unknown_format_raises() -> None:
         check_format_compliance(text, target_format="unsupported_format")
 
 
-def test_compute_format_compliance_rate_empty() -> None:
+def test_compute_format_compliance_rate_empty_raises() -> None:
     rollouts = []
 
-    rate = compute_format_compliance_rate(rollouts)
-
-    assert rate == 0.0
+    with pytest.raises(ValueError):
+        compute_format_compliance_rate(rollouts)
 
 
 def test_compute_format_compliance_rate_trajectories() -> None:
@@ -214,6 +214,24 @@ async def test_gsm8k_verifier_stripped_prompt_fallback() -> None:
     assert score == 1.0
 
 
+@pytest.mark.asyncio
+async def test_gsm8k_verifier_unknown_prompt_raises() -> None:
+    verifier = GSM8KVerifier({"What is 2 + 2?": "#### 4"})
+    rollout = RolloutTrajectory(
+        request_id="r1",
+        prompt="What is 3 + 3?",
+        prompt_token_ids=[1, 2],
+        completion_token_ids=[3, 4],
+        logprobs=[-0.1, -0.2],
+        finish_reason="stop",
+        text="#### 6",
+        worker_id=0,
+    )
+
+    with pytest.raises(KeyError):
+        await verifier(rollout)
+
+
 @pytest.mark.parametrize(
     ("pred", "gt", "expected"),
     [
@@ -322,3 +340,70 @@ async def test_synthetic_verifier(text: str, expected: float) -> None:
     score = await synthetic_verifier(rollout)
 
     assert score == expected
+
+
+def _scored(prompt: str, text: str) -> scorer.ScoredRollout:
+    return scorer.ScoredRollout(
+        trajectory=RolloutTrajectory(
+            request_id="r",
+            prompt=prompt,
+            prompt_token_ids=[],
+            completion_token_ids=[1],
+            logprobs=[0.0],
+            finish_reason="stop",
+            text=text,
+            worker_id=0,
+        ),
+        reward=0.0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("strict_format", "expected"),
+    [
+        pytest.param(True, 0.25, id="strict"),
+        pytest.param(False, 0.75, id="lenient"),
+    ],
+)
+def test_compute_accuracy(strict_format: bool, expected: float) -> None:
+    prompt_to_answer = {"a": "#### 4", "b": "#### 5", "c": "#### 6", "d": "#### 7"}
+    rollouts = [
+        _scored("a", "#### 4"),
+        _scored("b", "so 5"),
+        _scored("c", "cut off at 6"),
+        _scored("d", "#### 8"),
+    ]
+
+    accuracy = verifiers.compute_accuracy(rollouts, prompt_to_answer, strict_format)
+
+    assert accuracy == expected
+
+
+def test_compute_accuracy_ignores_rollout_reward() -> None:
+    rollouts = [_scored("a", "#### 4")]
+
+    accuracy = verifiers.compute_accuracy(rollouts, {"a": "#### 4"}, True)
+
+    assert accuracy == 1.0
+
+
+def test_compute_accuracy_matches_stripped_prompt() -> None:
+    rollouts = [_scored("  a \n", "#### 4")]
+
+    accuracy = verifiers.compute_accuracy(rollouts, {"a": "#### 4"}, True)
+
+    assert accuracy == 1.0
+
+
+def test_compute_accuracy_empty_raises() -> None:
+    rollouts: list[scorer.ScoredRollout] = []
+
+    with pytest.raises(ValueError):
+        verifiers.compute_accuracy(rollouts, {}, False)
+
+
+def test_compute_accuracy_unknown_prompt_raises() -> None:
+    rollouts = [_scored("b", "#### 4")]
+
+    with pytest.raises(KeyError):
+        verifiers.compute_accuracy(rollouts, {"a": "#### 4"}, False)

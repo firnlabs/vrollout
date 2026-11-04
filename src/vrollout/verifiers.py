@@ -6,6 +6,7 @@ from typing import Any
 
 import math_verify
 
+from vrollout.scorer import ScoredRollout
 from vrollout.types import RolloutTrajectory
 
 REGEX_PATTERN_GSM8K = re.compile(r"####\s*(?:\\?\$\s*)?-?[\d.,]*\d")
@@ -101,9 +102,12 @@ def compute_format_compliance_rate(
 
     Returns:
         Fraction of compliant rollouts as a float between 0.0 and 1.0.
+
+    Raises:
+        ValueError: If `rollouts` is empty, since the rate is then undefined.
     """
     if not rollouts:
-        return 0.0
+        raise ValueError("Cannot compute format compliance rate of no rollouts")
 
     compliant_count = 0
     for r in rollouts:
@@ -156,6 +160,61 @@ def verify_math_answer(
     return 1.0 if math_verify.verify(gt, pred) else 0.0
 
 
+def compute_accuracy(
+    rollouts: Sequence[ScoredRollout],
+    prompt_to_answer: dict[str, str],
+    strict_format: bool,
+) -> float:
+    """Computes answer accuracy of scored rollouts, independently of their reward.
+
+    The reward was computed under the run's `--strict-format` setting; this rescores
+    the same completions under either setting, so evaluation can report strict and
+    lenient accuracy side by side. Raises `KeyError` if a rollout's prompt has no
+    ground truth.
+
+    Args:
+        rollouts: Scored rollouts whose prompts are keys of `prompt_to_answer`.
+        prompt_to_answer: Mapping from prompt to ground truth answer.
+        strict_format: If True, only answers inside a format tag count.
+
+    Returns:
+        Fraction of correct rollouts as a float between 0.0 and 1.0.
+
+    Raises:
+        ValueError: If `rollouts` is empty, since accuracy is then undefined.
+    """
+    if not rollouts:
+        raise ValueError("Cannot compute accuracy of no rollouts")
+    correct = 0.0
+    for r in rollouts:
+        gt = _lookup_ground_truth(prompt_to_answer, r.trajectory.prompt)
+        correct += verify_math_answer(r.trajectory.text, gt, strict_format)
+    return correct / len(rollouts)
+
+
+def _lookup_ground_truth(prompt_to_answer: dict[str, str], prompt: str) -> str:
+    """Returns the ground truth for `prompt`, retrying with whitespace stripped.
+
+    Args:
+        prompt_to_answer: Mapping from prompt to ground truth answer.
+        prompt: Prompt of the rollout being scored.
+
+    Returns:
+        The ground truth answer for `prompt`.
+
+    Raises:
+        KeyError: If neither `prompt` nor its stripped form is a key. Every rollout
+            prompt comes from the dataset the mapping was built from, so a miss is a
+            bug that would otherwise score the rollout 0.
+    """
+    gt = prompt_to_answer.get(prompt)
+    if gt is None:
+        gt = prompt_to_answer.get(prompt.strip())
+    if gt is None:
+        raise KeyError(f"No ground truth for prompt: {prompt[:80]!r}")
+    return gt
+
+
 class GSM8KVerifier:
     """Async reward verifier for GSM8K math problems."""
 
@@ -172,11 +231,11 @@ class GSM8KVerifier:
         self._strict_format = strict_format
 
     async def __call__(self, rollout: RolloutTrajectory) -> float:
-        """Scores a rollout trajectory against ground truth."""
-        gt = self._prompt_to_answer.get(rollout.prompt)
-        if gt is None:
-            # Fallback: check stripped prompt
-            gt = self._prompt_to_answer.get(rollout.prompt.strip(), "")
+        """Scores a rollout trajectory against ground truth.
+
+        Raises `KeyError` if the rollout's prompt has no ground truth.
+        """
+        gt = _lookup_ground_truth(self._prompt_to_answer, rollout.prompt)
         return verify_math_answer(rollout.text, gt, strict_format=self._strict_format)
 
 

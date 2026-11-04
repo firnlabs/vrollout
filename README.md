@@ -100,7 +100,7 @@ uv run torchrun --standalone --nproc_per_node=4 \
   ```
 
 - **Live dashboards & Colab**: Authenticate using `uv run wandb login` or export `WANDB_API_KEY="<key>"`. Tracked metrics include:
-  - **Policy metrics**: `loss`, `kl`, `clip_fraction`, `reward_mean`, and `eval_reward_mean`.
+  - **Policy metrics**: `loss`, `kl`, `clip_fraction`, `reward_mean`, `eval_reward_mean`, `eval_accuracy_strict` (only answers marked with `\boxed{}`, `####` or a phrase such as "The answer is" count) and `eval_accuracy_lenient` (falls back to the last math expression in the completion), independent of `--strict-format`.
   - **Performance**: `step_time_s` per iteration.
   - **Hardware telemetry**: GPU memory allocation, GPU power draw, temperature, and compute utilization.
 

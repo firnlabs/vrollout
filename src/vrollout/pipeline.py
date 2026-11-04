@@ -52,9 +52,9 @@ class RolloutPipeline:
         """Generates rollouts and scores them concurrently via an asynchronous queue.
 
         Streams chunks of generated rollouts into an `AsyncQueue` consumed by a
-        background scoring worker, returning reward-annotated trajectories.
+        background scoring worker, returning reward-annotated trajectories. Empty
+        `prompts` returns an empty list.
         """
-        # TODO: check if the prompts list is empty; raise error if it is
         queue = async_queue.AsyncQueue(self._config.queue_maxsize)
         stop_event = asyncio.Event()
 
@@ -73,10 +73,27 @@ class RolloutPipeline:
         chunk_refs = self._manager.submit(
             prompts, sampling_params, self._config.chunk_size
         )
-        for ref in chunk_refs:
-            await queue.put_items(await ref)
 
-        await queue.join()
+        async def produce() -> None:
+            for ref in chunk_refs:
+                await queue.put_items(await ref)
+            await queue.join()
+
+        producer_task = asyncio.create_task(produce())
+        # if the scorer fails, nothing drains the queue and the producer would block
+        # forever in put_items or join, so race the two and surface the scorer error
+        await asyncio.wait(
+            {producer_task, scorer_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if scorer_task.done() and not producer_task.done():
+            producer_task.cancel()
+            await asyncio.gather(producer_task, return_exceptions=True)
+            # the scorer only exits before stop_event is set by raising
+            exc = scorer_task.exception()
+            assert exc is not None
+            raise exc
+
+        await producer_task
         stop_event.set()
 
         return await scorer_task

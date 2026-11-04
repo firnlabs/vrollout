@@ -122,7 +122,21 @@ def _run_evaluation(
     eval_prompts: list[str],
     max_tokens: int,
 ) -> tuple[float, list[scorer.ScoredRollout]]:
-    """Runs deterministic greedy evaluation on held-out prompts."""
+    """Runs deterministic greedy evaluation on held-out prompts.
+
+    Args:
+        rollout_pipeline: Pipeline that generates and scores the eval rollouts.
+        eval_prompts: Held-out prompts; if empty, nothing is generated.
+        max_tokens: Maximum completion length per eval prompt.
+
+    Returns:
+        Mean eval reward and the scored eval rollouts, or `(0.0, [])` when there are
+        no eval prompts.
+
+    Raises:
+        RuntimeError: If generation returns no rollouts for non-empty prompts, so a
+            failed eval isn't logged as a reward of 0.
+    """
     if not eval_prompts:
         return 0.0, []
 
@@ -135,9 +149,43 @@ def _run_evaluation(
         rollout_pipeline.generate_and_score(eval_prompts, eval_sampling_params)
     )
     if not scored_eval:
-        return 0.0, []
+        raise RuntimeError(
+            f"Evaluation returned no rollouts for {len(eval_prompts)} prompts"
+        )
     mean_reward = sum(sr.reward for sr in scored_eval) / len(scored_eval)
     return mean_reward, scored_eval
+
+
+def _eval_accuracies(
+    scored_eval: list[scorer.ScoredRollout], prompt_to_ans: dict[str, str]
+) -> dict[str, float]:
+    """Scores eval completions with and without the answer-tag requirement.
+
+    Lenient accuracy falls back to the last math expression in the completion, so
+    it can count truncated or malformed answers as correct by chance; strict
+    accuracy only counts answers marked with a format tag. The training reward is
+    unaffected.
+
+    Args:
+        scored_eval: Scored evaluation rollouts.
+        prompt_to_ans: Mapping from prompt to ground truth answer.
+
+    Returns:
+        `eval_accuracy_strict` and `eval_accuracy_lenient`, keyed as logged.
+    """
+    return {
+        f"eval_accuracy_{mode}": verifiers.compute_accuracy(
+            scored_eval, prompt_to_ans, strict_format=strict
+        )
+        for mode, strict in (("strict", True), ("lenient", False))
+    }
+
+
+def _format_accuracies(accuracies: dict[str, float]) -> str:
+    """Formats strict and lenient eval accuracy as one table cell."""
+    strict = accuracies["eval_accuracy_strict"]
+    lenient = accuracies["eval_accuracy_lenient"]
+    return f"{strict:.1%} / {lenient:.1%}"
 
 
 def _should_evaluate(step: int, every: int, num_iterations: int) -> bool:
@@ -601,6 +649,7 @@ def main(
         "Resp Len",
         "Zero-Adv Groups",
         "Eval Reward",
+        "Eval Acc (S / L)",
         "Step (s)",
         "Eval (s)",
         title="GRPO training progress",
@@ -619,6 +668,7 @@ def main(
         eval_format0 = verifiers.compute_format_compliance_rate(
             baseline_eval_rollouts, target_format=format_target
         )
+        eval_acc0 = _eval_accuracies(baseline_eval_rollouts, prompt_to_ans)
         final_eval_rollouts = baseline_eval_rollouts
         eval0_elapsed = time.perf_counter() - t_eval0
         table.add_row(
@@ -631,6 +681,7 @@ def main(
             "-",
             "-",
             f"{eval_reward0:.3f}",
+            _format_accuracies(eval_acc0),
             "-",
             f"{eval0_elapsed:.2f}s",
         )
@@ -639,6 +690,7 @@ def main(
                 {
                     "eval_reward_mean": eval_reward0,
                     "eval_format_compliance_rate": eval_format0,
+                    **eval_acc0,
                     "eval_time_s": eval0_elapsed,
                 },
                 step=0,
@@ -674,6 +726,7 @@ def main(
         # periodic evaluation on held-out prompts (rank 0)
         eval_reward: float | None = None
         eval_format_rate: float | None = None
+        eval_acc: dict[str, float] | None = None
         eval_time_s: float | None = None
         if (
             rank == 0
@@ -688,6 +741,7 @@ def main(
             eval_format_rate = verifiers.compute_format_compliance_rate(
                 final_eval_rollouts, target_format=format_target
             )
+            eval_acc = _eval_accuracies(final_eval_rollouts, prompt_to_ans)
             eval_time_s = time.perf_counter() - t_eval
 
         # every rank must enter: gathering FSDP2 shards is a collective
@@ -731,6 +785,7 @@ def main(
                 f"{rollout_stats.response_length_mean:.0f}",
                 f"{zero_adv:.0%}" if zero_adv is not None else "-",
                 eval_reward_str,
+                _format_accuracies(eval_acc) if eval_acc is not None else "-",
                 f"{step_time_s:.2f}s",
                 f"{eval_time_s:.2f}s" if eval_time_s is not None else "-",
             )
@@ -762,6 +817,8 @@ def main(
                     log_payload["eval_reward_mean"] = eval_reward
                 if eval_format_rate is not None:
                     log_payload["eval_format_compliance_rate"] = eval_format_rate
+                if eval_acc is not None:
+                    log_payload.update(eval_acc)
                 if eval_time_s is not None:
                     log_payload["eval_time_s"] = eval_time_s
                 if log_sequences_every > 0 and (it + 1) % log_sequences_every == 0:

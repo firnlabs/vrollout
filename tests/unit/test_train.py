@@ -450,3 +450,60 @@ def test_init_distributed_skips_when_initialized(
     train._init_distributed(torch.device("cpu"), timedelta(minutes=90))
 
     mock_init.assert_not_called()
+
+
+def test_eval_accuracies_reports_strict_and_lenient() -> None:
+    prompt_to_ans = {"p1": "#### 4", "p2": "#### 5"}
+    scored_eval = [
+        _make_scored_rollout("p1", "#### 4", 1.0),
+        _make_scored_rollout("p2", "truncated at 5", 1.0),
+    ]
+
+    accuracies = train._eval_accuracies(scored_eval, prompt_to_ans)
+
+    assert accuracies == {"eval_accuracy_strict": 0.5, "eval_accuracy_lenient": 1.0}
+
+
+def test_format_accuracies() -> None:
+    accuracies = {"eval_accuracy_strict": 0.25, "eval_accuracy_lenient": 0.5}
+
+    cell = train._format_accuracies(accuracies)
+
+    assert cell == "25.0% / 50.0%"
+
+
+def _eval_pipeline(scored: list[scorer.ScoredRollout]) -> MagicMock:
+    """Returns a fake rollout pipeline whose generation yields `scored`."""
+
+    async def generate_and_score(*_args, **_kwargs) -> list[scorer.ScoredRollout]:
+        return scored
+
+    return MagicMock(generate_and_score=generate_and_score)
+
+
+def test_run_evaluation_returns_mean_reward() -> None:
+    scored_rollouts = [
+        _make_scored_rollout("a", "", 1.0),
+        _make_scored_rollout("b", "", 0.0),
+    ]
+    rollout_pipeline = _eval_pipeline(scored_rollouts)
+
+    mean_reward, rollouts = train._run_evaluation(rollout_pipeline, ["a", "b"], 8)
+
+    assert mean_reward == 0.5
+    assert rollouts == scored_rollouts
+
+
+def test_run_evaluation_no_prompts_returns_empty() -> None:
+    rollout_pipeline = _eval_pipeline([])
+
+    mean_reward, rollouts = train._run_evaluation(rollout_pipeline, [], 8)
+
+    assert (mean_reward, rollouts) == (0.0, [])
+
+
+def test_run_evaluation_no_rollouts_raises() -> None:
+    rollout_pipeline = _eval_pipeline([])
+
+    with pytest.raises(RuntimeError):
+        train._run_evaluation(rollout_pipeline, ["a"], 8)
