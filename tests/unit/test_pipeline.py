@@ -79,3 +79,19 @@ async def test_generate_and_score_preserves_prompt_order() -> None:
     results = await pipe.generate_and_score(prompts, None)
 
     assert [r.trajectory.prompt for r in results] == prompts
+
+
+async def _failing_verifier(rollout: types.RolloutTrajectory) -> float:
+    raise KeyError(rollout.prompt)
+
+
+@pytest.mark.asyncio
+async def test_generate_and_score_propagates_verifier_error() -> None:
+    manager = _SlowRolloutManager()
+    config = pipeline.PipelineConfig(chunk_size=2, scoring_batch_size=1)
+    pipe = pipeline.RolloutPipeline(manager, _failing_verifier, config)
+    prompts = [f"Prompt {i}" for i in range(8)]
+
+    with pytest.raises(KeyError):
+        async with asyncio.timeout(5):
+            await pipe.generate_and_score(prompts, None)
