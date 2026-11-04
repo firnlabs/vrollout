@@ -4,13 +4,61 @@ from collections.abc import Sequence
 import re
 from typing import Any
 
-from beartype import beartype
-from jaxtyping import jaxtyped
+import math_verify
 
 from vrollout.types import RolloutTrajectory
 
-REGEX_PATTERN_GSM8K = re.compile(r"####\s*([-\d\.,]+)")
-REGEX_PATTERN_BOXED = re.compile(r"\\boxed\{([-\d\.,]+)\}")
+REGEX_PATTERN_GSM8K = re.compile(r"####\s*(?:\\?\$\s*)?-?[\d.,]*\d")
+REGEX_PATTERN_BOXED = re.compile(r"\\boxed\{[^}]")
+
+# math-verify only counts answers marked with \boxed{} or a phrase such as "final
+# answer:" as anchored, so GSM8K's "####" tag is rewritten into such a phrase
+_GSM8K_TAG = re.compile(r"####")
+_GSM8K_TAG_AS_ANCHOR = "Final answer:"
+# base models often keep generating past their answer and invent the next few-shot
+# "Question:", whose answer must not count
+_FOLLOW_UP_QUESTION = re.compile(r"\n\s*Question:")
+
+# \boxed{} outranks other anchors; among answers of one kind the last one wins
+_STRICT_EXTRACTION = (
+    math_verify.LatexExtractionConfig(
+        try_extract_without_anchor=False, boxed_match_priority=0
+    ),
+    math_verify.ExprExtractionConfig(try_extract_without_anchor=False),
+)
+_LENIENT_EXTRACTION = (
+    math_verify.LatexExtractionConfig(boxed_match_priority=0),
+    math_verify.ExprExtractionConfig(),
+)
+
+
+def _strip_follow_up_questions(text: str) -> str:
+    """Drops everything from the first invented follow-up "Question:" onwards."""
+    return _FOLLOW_UP_QUESTION.split(text, maxsplit=1)[0]
+
+
+def parse_answer(text: str, strict: bool = False) -> list[Any]:
+    r"""Parses the final answer of a completion or reference solution.
+
+    Answers marked with '\boxed{}', '#### ', or a phrase such as 'The answer is'
+    are found by math-verify, which also normalizes '$', thousands separators and
+    LaTeX units. Text from an invented follow-up 'Question:' onwards is ignored.
+
+    Args:
+        text: The completion or reference solution to parse.
+        strict: If True, only marked answers count; otherwise math-verify falls
+            back to the last expression in the text.
+
+    Returns:
+        math-verify's parse result: the answer as a SymPy object followed by the
+        matched string, or an empty list if no answer was found.
+    """
+    if not text:
+        return []
+    text = _GSM8K_TAG.sub(_GSM8K_TAG_AS_ANCHOR, _strip_follow_up_questions(text))
+    return math_verify.parse(
+        text, extraction_config=_STRICT_EXTRACTION if strict else _LENIENT_EXTRACTION
+    )
 
 
 def check_format_compliance(text: str, target_format: str = "gsm8k") -> bool:
@@ -29,6 +77,7 @@ def check_format_compliance(text: str, target_format: str = "gsm8k") -> bool:
     if not text:
         return False
 
+    text = _strip_follow_up_questions(text)
     if target_format == "gsm8k":
         return bool(REGEX_PATTERN_GSM8K.search(text))
     if target_format == "boxed":
@@ -72,53 +121,21 @@ def compute_format_compliance_rate(
 
 
 def extract_numerical_answer(text: str, strict: bool = False) -> str | None:
-    r"""Extracts final numerical answer from reasoning or completion text.
-
-    Supports '#### <answer>', '\boxed{<answer>}', and 'The answer is <answer>'.
-    When strict is False, falls back to the last standalone number.
+    """Returns the final answer of `text` as a string, for display and logging.
 
     Args:
-        text: The reasoning completion string to parse.
-        strict: If True, disables the fallback to unformatted standalone numbers.
+        text: The completion or reference solution to parse.
+        strict: If True, only answers marked with a format tag count.
 
     Returns:
-        Extracted answer string with thousands commas stripped, or None if no match.
+        The answer string math-verify matched, or None if no answer was found.
     """
-    if not text:
+    parsed = parse_answer(text, strict=strict)
+    if not parsed:
         return None
-
-    # check for '#### <answer>'
-    match = re.search(r"####\s*([-\d\.,]+)", text)
-    if match:
-        raw = match.group(1).replace(",", "").strip()
-        return raw.rstrip(".")
-
-    # check for '\boxed{<answer>}'
-    match = re.search(r"\\boxed\{([-\d\.,]+)\}", text)
-    if match:
-        raw = match.group(1).replace(",", "").strip()
-        return raw.rstrip(".")
-
-    # check for 'The answer is <answer>'
-    match = re.search(
-        r"(?:the\s+answer\s+is|answer\s*[:=])\s*([-\d\.,]+)", text, re.IGNORECASE
-    )
-    if match:
-        raw = match.group(1).replace(",", "").strip()
-        return raw.rstrip(".")
-
-    if strict:
-        return None
-
-    # fallback to the last standalone number
-    matches = re.findall(r"[-+]?\d*\.?\d+", text.replace(",", ""))
-    if matches:
-        return matches[-1].rstrip(".")
-
-    return None
+    return str(parsed[-1]).replace(",", "")
 
 
-@jaxtyped(typechecker=beartype)
 def verify_math_answer(
     prediction: str, ground_truth: str, strict_format: bool = False
 ) -> float:
@@ -130,24 +147,13 @@ def verify_math_answer(
         strict_format: If True, requires prediction to adhere to explicit format tags.
 
     Returns:
-        1.0 for exact numerical equivalence, 0.0 otherwise.
+        1.0 if math-verify finds the answers equivalent, 0.0 otherwise.
     """
-    pred_ans = extract_numerical_answer(prediction, strict=strict_format)
-    gt_ans = extract_numerical_answer(ground_truth, strict=False)
-
-    if pred_ans is None or gt_ans is None:
+    gt = parse_answer(ground_truth)
+    pred = parse_answer(prediction, strict=strict_format)
+    if not gt or not pred:
         return 0.0
-
-    if pred_ans == gt_ans:
-        return 1.0
-
-    try:
-        if abs(float(pred_ans) - float(gt_ans)) < 1e-5:
-            return 1.0
-    except ValueError:
-        pass
-
-    return 0.0
+    return 1.0 if math_verify.verify(gt, pred) else 0.0
 
 
 class GSM8KVerifier:
