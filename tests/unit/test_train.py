@@ -1,6 +1,7 @@
 """Unit tests for train CLI qualitative table and evaluation rendering."""
 
 from datetime import timedelta
+import json
 import random
 from unittest.mock import MagicMock
 
@@ -9,6 +10,7 @@ import torch
 import typer
 from typer.testing import CliRunner
 
+from vrollout import metrics
 from vrollout import scorer
 from vrollout import train
 from vrollout import types
@@ -507,3 +509,36 @@ def test_run_evaluation_no_rollouts_raises() -> None:
 
     with pytest.raises(RuntimeError):
         train._run_evaluation(rollout_pipeline, ["a"], 8)
+
+
+def test_save_eval_rows_writes_jsonl(tmp_path) -> None:
+    rows = metrics.eval_rows(
+        [
+            _make_scored_rollout("q1", "#### 4", 1.0),
+            _make_scored_rollout("q2", "", 0.0),
+        ],
+        {"q1": "#### 4"},
+    )
+
+    path = train._save_eval_rows(rows, str(tmp_path / "evals"), step=3)
+
+    expected_path = tmp_path / "evals" / "eval-step-3.jsonl"
+    assert path == expected_path
+    lines = expected_path.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in lines] == [row.to_dict() for row in rows]
+
+
+def test_save_eval_rows_skipped_without_dir() -> None:
+    rows = metrics.eval_rows([_make_scored_rollout("q1", "#### 4", 1.0)], {})
+
+    path = train._save_eval_rows(rows, None, step=0)
+
+    assert path is None
+
+
+def test_cli_eval_output_dir_flag_accepted(tmp_path) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(train.app, ["--eval-output-dir", str(tmp_path), "--help"])
+
+    assert result.exit_code == 0

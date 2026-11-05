@@ -103,6 +103,7 @@ uv run torchrun --standalone --nproc_per_node=4 \
   - **Policy metrics**: `loss`, `kl`, `clip_fraction`, `reward_mean`, `eval_reward_mean`, `eval_accuracy_strict` (only answers marked with `\boxed{}`, `####` or a phrase such as "The answer is" count) and `eval_accuracy_lenient` (falls back to the last math expression in the completion), independent of `--strict-format`.
   - **Performance**: `step_time_s` per iteration.
   - **Hardware telemetry**: GPU memory allocation, GPU power draw, temperature, and compute utilization.
+  - **Evaluation answers**: `eval_response_length_mean`, `eval_truncation_rate`, and an `eval_samples` table with every eval answer (prompt, extracted and raw ground truth, completion, extracted answer, reward, finish reason, length). Pass `--eval-output-dir <dir>` to also save them as `eval-step-<N>.jsonl`.
 
 ### Running the distributed engine benchmark
 
