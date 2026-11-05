@@ -20,6 +20,7 @@ from torch import distributed as dist
 from torch import nn
 from torch import optim
 from torch.distributed import device_mesh
+import transformers  # type: ignore[import-untyped]
 import typer
 
 from vrollout import buffer
@@ -55,20 +56,18 @@ def _create_models(
         actor = models.create_model(model_name).to(device)
         reference = models.create_model(model_name).to(device)
     else:
-        from transformers import AutoModelForCausalLM  # type: ignore[import-untyped]
-
         ref_dtype = (
             torch.bfloat16
             if (device.type == "cuda" and torch.cuda.is_bf16_supported())
             else (torch.float16 if device.type == "cuda" else torch.float32)
         )
-        reference = AutoModelForCausalLM.from_pretrained(
+        reference = transformers.AutoModelForCausalLM.from_pretrained(
             model_name, dtype=ref_dtype
         ).to(device)
 
         # set actor model dtype to float32 so that optimizer parameters work with that
         # dtype, since autocast_dtype may downcast actor weights (e.g. bfloat16)
-        actor = AutoModelForCausalLM.from_pretrained(
+        actor = transformers.AutoModelForCausalLM.from_pretrained(
             model_name, dtype=torch.float32
         ).to(device)
 
@@ -97,9 +96,7 @@ def _save_checkpoint(
     """Saves the actor on rank 0, with the tokenizer so vLLM can load the directory."""
     saved_path = checkpoint.save_checkpoint(actor, path, rank)
     if saved_path is not None and backend != "mock":
-        from transformers import AutoTokenizer  # type: ignore[import-untyped]
-
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         if tokenizer is None:
             raise ValueError(f"No tokenizer found for {model_name}")
         tokenizer.save_pretrained(saved_path)
@@ -258,8 +255,26 @@ def _build_qualitative_table(
     max_samples: int = 3,
     max_chars: int = 256,
     target_format: str = "gsm8k",
+    display_prompts: dict[str, str] | None = None,
 ) -> rich_table.Table:
-    """Builds a side-by-side table comparing baseline and final eval completions."""
+    """Builds a side-by-side table comparing baseline and final eval completions.
+
+    Args:
+        eval_prompts: Prompts sent to the sampler, in evaluation order.
+        prompt_to_ans: Ground-truth answer for each prompt.
+        baseline_eval: Scored rollouts before training.
+        final_eval: Scored rollouts after the last evaluation.
+        max_samples: Maximum number of rows to show.
+        max_chars: Maximum characters per completion cell (0 for no limit).
+        target_format: Answer format used for the compliance badge.
+        display_prompts: Optional text to show for each prompt, e.g. the question
+            before chat-template rendering. Prompts without an entry are shown as
+            sent.
+
+    Returns:
+        The table, with prompts whose reward improved the most listed first.
+    """
+    display_prompts = display_prompts or {}
     sample_table = rich_table.Table(
         "Prompt",
         "Ground Truth",
@@ -284,7 +299,7 @@ def _build_qualitative_table(
         gt_raw = prompt_to_ans.get(prompt, "")
         gt_ans = verifiers.extract_numerical_answer(gt_raw) or gt_raw
         sample_table.add_row(
-            prompt,
+            display_prompts.get(prompt, prompt),
             str(gt_ans),
             _format_eval_cell(
                 base_by_prompt.get(prompt),
@@ -395,7 +410,18 @@ def main(
     prompt_template: str = typer.Option(
         datasets.DEFAULT_GSM8K_PROMPT_TEMPLATE,
         "--prompt-template",
-        help="Reasoning prompt template with {question} placeholder for GSM8K",
+        help=(
+            "Reasoning prompt template with {question} placeholder for GSM8K, a "
+            f"preset ({', '.join(datasets.PROMPT_TEMPLATE_PRESETS)}), or 'raw'"
+        ),
+    ),
+    chat_template: bool = typer.Option(
+        False,
+        "--chat-template/--no-chat-template",
+        help=(
+            "Wrap each prompt as a user turn of the tokenizer's chat template "
+            "(not supported by the mock backend)"
+        ),
     ),
     format_target: str = typer.Option(
         "gsm8k",
@@ -442,6 +468,10 @@ def main(
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
     console = rich_console.Console()
+    if chat_template and backend == "mock":
+        raise typer.BadParameter(
+            "--chat-template needs a Hugging Face tokenizer; use --backend vllm."
+        )
     _seed_all(seed)
 
     eval_completion_len = eval_max_tokens if eval_max_tokens is not None else max_tokens
@@ -544,6 +574,7 @@ def main(
                     "micro_batch_size": micro_batch_size,
                     "logit_chunk_size": logit_chunk_size,
                     "prompt_template": prompt_template,
+                    "chat_template": chat_template,
                     "format_target": format_target,
                     "strict_format": strict_format,
                     "num_rollout_workers": num_rollout_workers,
@@ -574,6 +605,7 @@ def main(
     all_prompts: list[str] = []
     eval_prompts: list[str] = []
     prompt_to_ans: dict[str, str] = {}
+    display_prompts: dict[str, str] = {}
 
     if rank == 0:
         os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
@@ -581,11 +613,7 @@ def main(
 
         total_prompts_needed = num_prompts * num_iterations
         run_eval = eval_every > 0 and num_eval_prompts > 0
-        effective_template = (
-            None
-            if prompt_template.strip().lower() in ("", "none", "raw")
-            else prompt_template
-        )
+        effective_template = datasets.resolve_prompt_template(prompt_template)
         if dataset == "gsm8k":
             data = datasets.load_gsm8k_dataset(
                 num_samples=total_prompts_needed,
@@ -611,6 +639,17 @@ def main(
                 else []
             )
 
+        if chat_template:
+            tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+            data = datasets.apply_chat_template(data, tokenizer)
+            raw_eval_prompts = [p for p, _ in eval_data]
+            eval_data = datasets.apply_chat_template(eval_data, tokenizer)
+            display_prompts = {
+                rendered: raw
+                for (rendered, _), raw in zip(eval_data, raw_eval_prompts, strict=True)
+            }
+
+        # keys must be the exact prompt strings sent to the sampler
         prompt_to_ans = {p: a for p, a in data + eval_data}
         verifier_fn = (
             verifiers.synthetic_verifier
@@ -892,6 +931,7 @@ def main(
                 max_samples=num_qualitative_samples,
                 max_chars=eval_max_chars,
                 target_format=format_target,
+                display_prompts=display_prompts,
             )
             console.print(qualitative_table)
         if wandb_run:

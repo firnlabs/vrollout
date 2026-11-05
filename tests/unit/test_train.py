@@ -154,6 +154,33 @@ def test_build_qualitative_table_preserves_order_when_rewards_equal() -> None:
     assert table.columns[0]._cells == ["p1", "p2", "p3"]
 
 
+def test_build_qualitative_table_shows_display_prompts() -> None:
+    """Test that rendered prompts are shown by their display text when mapped."""
+    rendered = "<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n"
+    prompts = [rendered, "p_unmapped"]
+    gt_map = {rendered: "4", "p_unmapped": "5"}
+    baseline_eval = [
+        _make_scored_rollout(rendered, "#### 3", 0.0),
+        _make_scored_rollout("p_unmapped", "#### 1", 0.0),
+    ]
+    final_eval = [
+        _make_scored_rollout(rendered, "#### 4", 1.0),
+        _make_scored_rollout("p_unmapped", "#### 1", 0.0),
+    ]
+
+    table = train._build_qualitative_table(
+        eval_prompts=prompts,
+        prompt_to_ans=gt_map,
+        baseline_eval=baseline_eval,
+        final_eval=final_eval,
+        max_samples=2,
+        display_prompts={rendered: "What is 2+2?"},
+    )
+
+    assert table.columns[0]._cells == ["What is 2+2?", "p_unmapped"]
+    assert table.columns[1]._cells == ["4", "5"]
+
+
 def test_format_eval_cell_zero_max_chars_disables_truncation() -> None:
     """Test that max_chars=0 disables text truncation for long strings."""
     long_text = "step " * 100
@@ -542,3 +569,24 @@ def test_cli_eval_output_dir_flag_accepted(tmp_path) -> None:
     result = runner.invoke(train.app, ["--eval-output-dir", str(tmp_path), "--help"])
 
     assert result.exit_code == 0
+
+
+def test_cli_chat_template_flag_accepted() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app,
+        ["--chat-template", "--prompt-template", "qwen-boxed", "--help"],
+    )
+
+    assert result.exit_code == 0
+
+
+def test_cli_chat_template_rejects_mock_backend() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app, ["--backend", "mock", "--chat-template"], standalone_mode=False
+    )
+
+    assert isinstance(result.exception, typer.BadParameter)

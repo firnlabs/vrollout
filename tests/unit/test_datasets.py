@@ -108,3 +108,57 @@ def test_load_synthetic_dataset(default_num_samples: int) -> None:
     for q, a in synthetic_samples:
         assert "What is" in q
         assert "####" in a
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("gsm8k", datasets.DEFAULT_GSM8K_PROMPT_TEMPLATE, id="preset"),
+        pytest.param(
+            " Qwen-Boxed ", datasets.QWEN_BOXED_PROMPT_TEMPLATE, id="preset_casing"
+        ),
+        pytest.param("Q: {question}", "Q: {question}", id="custom"),
+        pytest.param("raw", None, id="raw"),
+        pytest.param("None", None, id="none"),
+        pytest.param("  ", None, id="blank"),
+    ],
+)
+def test_resolve_prompt_template(value: str, expected: str | None) -> None:
+    template = datasets.resolve_prompt_template(value)
+
+    assert template == expected
+
+
+def test_qwen_boxed_prompt_template() -> None:
+    question = "What is 2 + 2?"
+
+    prompt = datasets.format_gsm8k_prompt(question, datasets.QWEN_BOXED_PROMPT_TEMPLATE)
+
+    assert prompt == (
+        "What is 2 + 2?\n"
+        "Please reason step by step, and put your final answer within \\boxed{}."
+    )
+
+
+class _FakeChatTokenizer:
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, str]],
+        tokenize: bool,
+        add_generation_prompt: bool,
+    ) -> str:
+        assert not tokenize
+        assert add_generation_prompt
+        (turn,) = conversation
+        return f"<user>{turn['content']}</user><assistant>"
+
+
+def test_apply_chat_template() -> None:
+    samples = [("Q1?", "#### 1"), ("Q2?", "#### 2")]
+
+    templated = datasets.apply_chat_template(samples, _FakeChatTokenizer())
+
+    assert templated == [
+        ("<user>Q1?</user><assistant>", "#### 1"),
+        ("<user>Q2?</user><assistant>", "#### 2"),
+    ]

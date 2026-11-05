@@ -1,6 +1,8 @@
 """Dataset loading routines for RL post-training."""
 
+from collections.abc import Sequence
 import random
+from typing import Protocol
 
 from datasets import load_dataset
 
@@ -8,6 +10,90 @@ DEFAULT_GSM8K_PROMPT_TEMPLATE = (
     "Question: {question}\n"
     "Please reason step by step, and put your final answer within #### <answer>."
 )
+# Qwen2.5's chain-of-thought prompt, used for its published GSM8K and MATH scores
+QWEN_BOXED_PROMPT_TEMPLATE = (
+    "{question}\nPlease reason step by step, and put your final answer within "
+    "\\boxed{}."
+)
+PROMPT_TEMPLATE_PRESETS: dict[str, str] = {
+    "gsm8k": DEFAULT_GSM8K_PROMPT_TEMPLATE,
+    "qwen-boxed": QWEN_BOXED_PROMPT_TEMPLATE,
+}
+_RAW_PROMPT_TEMPLATE_NAMES = ("", "none", "raw")
+
+
+class ChatTokenizer(Protocol):
+    """Tokenizer that renders a conversation with its chat template.
+
+    Mirrors the subset of `transformers.PreTrainedTokenizerBase.apply_chat_template`
+    used here, so Hugging Face tokenizers satisfy it directly.
+    """
+
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, str]],
+        tokenize: bool,
+        add_generation_prompt: bool,
+    ) -> str:
+        """Renders `conversation` as a prompt string.
+
+        Args:
+            conversation: Chat turns, each a dict with 'role' (e.g. 'user') and
+                'content' keys.
+            tokenize: Whether to return token ids instead of a string. Callers
+                pass False to get the rendered text.
+            add_generation_prompt: Whether to append the assistant turn header
+                so the model continues as the assistant.
+
+        Returns:
+            The conversation rendered with the tokenizer's chat template.
+        """
+        ...
+
+
+def resolve_prompt_template(name_or_template: str) -> str | None:
+    """Resolves a `--prompt-template` value to a template string.
+
+    Args:
+        name_or_template: A key of `PROMPT_TEMPLATE_PRESETS`, one of 'raw', 'none'
+            or '' to keep the raw question, or a template with a '{question}'
+            placeholder.
+
+    Returns:
+        The template string, or None to keep the raw question.
+    """
+    key = name_or_template.strip().lower()
+    if key in _RAW_PROMPT_TEMPLATE_NAMES:
+        return None
+    return PROMPT_TEMPLATE_PRESETS.get(key, name_or_template)
+
+
+def apply_chat_template(
+    samples: Sequence[tuple[str, str]], tokenizer: ChatTokenizer
+) -> list[tuple[str, str]]:
+    """Wraps each prompt as a single user turn of the tokenizer's chat template.
+
+    The rendered prompt ends with the assistant generation header, so it can be
+    sent to the sampler as a raw string. Answers are left unchanged.
+
+    Args:
+        samples: (prompt, answer) pairs.
+        tokenizer: Tokenizer whose chat template renders the prompts.
+
+    Returns:
+        (chat-formatted prompt, answer) pairs, in input order.
+    """
+    return [
+        (
+            tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+            ),
+            answer,
+        )
+        for prompt, answer in samples
+    ]
 
 
 def format_gsm8k_prompt(
