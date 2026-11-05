@@ -7,6 +7,7 @@ os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
 import asyncio
 from dataclasses import dataclass
 import datetime
+import json
 import pathlib
 import random
 import time
@@ -186,6 +187,29 @@ def _format_accuracies(accuracies: dict[str, float]) -> str:
     strict = accuracies["eval_accuracy_strict"]
     lenient = accuracies["eval_accuracy_lenient"]
     return f"{strict:.1%} / {lenient:.1%}"
+
+
+def _save_eval_rows(
+    rows: list[metrics.EvalRow], output_dir: str | None, step: int
+) -> pathlib.Path | None:
+    """Writes eval rows to `<output_dir>/eval-step-<step>.jsonl`, one per line.
+
+    Args:
+        rows: Evaluation rows to save.
+        output_dir: Directory to write into; saving is skipped when `None`.
+        step: Training iteration the evaluation ran after (0 for the baseline).
+
+    Returns:
+        Path of the written file, or `None` if saving was skipped.
+    """
+    if output_dir is None:
+        return None
+    path = pathlib.Path(output_dir) / f"eval-step-{step}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row.to_dict()) + "\n")
+    return path
 
 
 def _should_evaluate(step: int, every: int, num_iterations: int) -> bool:
@@ -403,6 +427,13 @@ def main(
             "(disabled when unset)"
         ),
     ),
+    eval_output_dir: str | None = typer.Option(
+        None,
+        help=(
+            "Directory to save every eval answer as eval-step-<N>.jsonl "
+            "(disabled when unset)"
+        ),
+    ),
     checkpoint_every: int = typer.Option(
         0,
         min=0,
@@ -521,6 +552,7 @@ def main(
                     "enforce_eager": enforce_eager,
                     "seed": seed,
                     "checkpoint_dir": checkpoint_dir,
+                    "eval_output_dir": eval_output_dir,
                     "fsdp": shard_models,
                     "world_size": world_size,
                 },
@@ -671,6 +703,8 @@ def main(
         eval_acc0 = _eval_accuracies(baseline_eval_rollouts, prompt_to_ans)
         final_eval_rollouts = baseline_eval_rollouts
         eval0_elapsed = time.perf_counter() - t_eval0
+        eval_rows0 = metrics.eval_rows(baseline_eval_rollouts, prompt_to_ans)
+        _save_eval_rows(eval_rows0, eval_output_dir, step=0)
         table.add_row(
             "0",
             "-",
@@ -692,6 +726,11 @@ def main(
                     "eval_format_compliance_rate": eval_format0,
                     **eval_acc0,
                     "eval_time_s": eval0_elapsed,
+                    **metrics.eval_length_metrics(eval_rows0),
+                    "eval_samples": wandb_table(
+                        columns=list(metrics.EVAL_COLUMNS),
+                        data=[row.to_list() for row in eval_rows0],
+                    ),
                 },
                 step=0,
             )
@@ -728,6 +767,7 @@ def main(
         eval_format_rate: float | None = None
         eval_acc: dict[str, float] | None = None
         eval_time_s: float | None = None
+        eval_rows: list[metrics.EvalRow] | None = None
         if (
             rank == 0
             and eval_prompts
@@ -743,6 +783,8 @@ def main(
             )
             eval_acc = _eval_accuracies(final_eval_rollouts, prompt_to_ans)
             eval_time_s = time.perf_counter() - t_eval
+            eval_rows = metrics.eval_rows(final_eval_rollouts, prompt_to_ans)
+            _save_eval_rows(eval_rows, eval_output_dir, step=it + 1)
 
         # every rank must enter: gathering FSDP2 shards is a collective
         if checkpoint_dir is not None and checkpoint.should_checkpoint(
@@ -821,6 +863,12 @@ def main(
                     log_payload.update(eval_acc)
                 if eval_time_s is not None:
                     log_payload["eval_time_s"] = eval_time_s
+                if eval_rows is not None:
+                    log_payload.update(metrics.eval_length_metrics(eval_rows))
+                    log_payload["eval_samples"] = wandb_table(
+                        columns=list(metrics.EVAL_COLUMNS),
+                        data=[row.to_list() for row in eval_rows],
+                    )
                 if log_sequences_every > 0 and (it + 1) % log_sequences_every == 0:
                     log_payload["sequences"] = wandb_table(
                         columns=list(metrics.SEQUENCE_COLUMNS),

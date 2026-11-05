@@ -1,5 +1,6 @@
 """Rollout diagnostics for monitoring GRPO training batches."""
 
+from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import asdict
 from dataclasses import astuple
@@ -9,6 +10,7 @@ from dataclasses import fields
 from jaxtyping import Float
 from torch import Tensor
 
+from vrollout import verifiers
 from vrollout.scorer import ScoredRollout
 
 
@@ -171,3 +173,99 @@ def sequence_rows(
         )
         for i, (sr, adv) in enumerate(zip(scored_rollouts, advantages, strict=True))
     ]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EvalRow:
+    """One held-out evaluation answer, saved so runs can be compared per problem.
+
+    Attributes:
+        prompt: Prompt sent to the sampler; identifies the problem across runs.
+        ground_truth: Numerical answer extracted from the reference solution, or
+            `None` if the prompt has no known answer.
+        ground_truth_raw: Reference solution exactly as stored in the dataset, so
+            any verifier can be rerun offline on the same rows without depending
+            on the parser that produced `ground_truth`.
+        completion: Full completion text, so answer extraction can be audited.
+        extracted_answer: Numerical answer the lenient extractor read from the
+            completion, or `None` if it found none.
+        reward: Reward the verifier assigned to the completion.
+        finish_reason: Why the sampler stopped; `"length"` means truncation.
+        length: Completion length in tokens.
+    """
+
+    prompt: str
+    ground_truth: str | None
+    ground_truth_raw: str | None
+    completion: str
+    extracted_answer: str | None
+    reward: float
+    finish_reason: str
+    length: int
+
+    def to_list(self) -> list[str | float | int | None]:
+        """Returns the field values in `EVAL_COLUMNS` order."""
+        return list(astuple(self))
+
+    def to_dict(self) -> dict[str, str | float | int | None]:
+        """Returns field name to value, for JSON serialization."""
+        return asdict(self)
+
+
+EVAL_COLUMNS: tuple[str, ...] = tuple(f.name for f in fields(EvalRow))
+
+
+def eval_rows(
+    scored_rollouts: Sequence[ScoredRollout], prompt_to_answer: Mapping[str, str]
+) -> list[EvalRow]:
+    """Builds one row per evaluation answer.
+
+    Args:
+        scored_rollouts: Scored evaluation rollouts.
+        prompt_to_answer: Mapping from prompt to reference solution.
+
+    Returns:
+        One row per rollout, in input order.
+    """
+    rows = []
+    for sr in scored_rollouts:
+        reference = prompt_to_answer.get(sr.trajectory.prompt)
+        rows.append(
+            EvalRow(
+                prompt=sr.trajectory.prompt,
+                ground_truth=(
+                    verifiers.extract_numerical_answer(reference)
+                    if reference is not None
+                    else None
+                ),
+                ground_truth_raw=reference,
+                completion=sr.trajectory.text,
+                extracted_answer=verifiers.extract_numerical_answer(sr.trajectory.text),
+                reward=sr.reward,
+                finish_reason=sr.trajectory.finish_reason,
+                length=len(sr.trajectory.completion_token_ids),
+            )
+        )
+    return rows
+
+
+def eval_length_metrics(rows: Sequence[EvalRow]) -> dict[str, float]:
+    """Computes the mean eval answer length and the fraction truncated.
+
+    A truncated answer usually has no final answer tag, so a high truncation rate
+    means the eval token budget, not the model, caps accuracy.
+
+    Args:
+        rows: Evaluation rows.
+
+    Returns:
+        `eval_response_length_mean` (tokens) and `eval_truncation_rate`, or an
+        empty dict if there are no rows.
+    """
+    if not rows:
+        return {}
+    return {
+        "eval_response_length_mean": sum(r.length for r in rows) / len(rows),
+        "eval_truncation_rate": sum(r.finish_reason == "length" for r in rows)
+        / len(rows),
+    }
