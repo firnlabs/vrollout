@@ -33,6 +33,7 @@ from vrollout import pipeline
 from vrollout import placement
 from vrollout import scorer
 from vrollout import sharding
+from vrollout import trainer
 from vrollout import types
 from vrollout import verifiers
 from vrollout.testing import models
@@ -378,7 +379,18 @@ def main(
     num_qualitative_samples: int = typer.Option(
         3, help="Number of held-out eval completions to display (0 to disable)"
     ),
-    lr: float = typer.Option(1e-5, help="Learning rate for AdamW"),
+    lr: float = typer.Option(
+        1e-6,
+        help="Learning rate for AdamW (1e-5 degraded Qwen2.5-0.5B within 40 steps)",
+    ),
+    lr_warmup_steps: int = typer.Option(
+        0,
+        min=0,
+        help=(
+            "Ramp the learning rate linearly over the first N optimizer steps, then "
+            "hold it constant (0 disables warmup)"
+        ),
+    ),
     beta: float = typer.Option(0.04, help="KL penalty coefficient (beta)"),
     clip_eps: float = typer.Option(0.2, help="Clipping epsilon for policy surrogate"),
     num_rollout_workers: int = typer.Option(2, help="Number of Ray rollout workers"),
@@ -613,6 +625,7 @@ def main(
                     "max_seq_len": max_seq_len,
                     "temperature": temperature,
                     "lr": lr,
+                    "lr_warmup_steps": lr_warmup_steps,
                     "beta": beta,
                     "clip_eps": clip_eps,
                     "max_grad_norm": max_grad_norm,
@@ -644,6 +657,7 @@ def main(
         actor = sharding.shard_model(actor, mesh)
         reference = sharding.shard_model(reference, mesh)
     optimizer = optim.AdamW(actor.parameters(), lr=lr)
+    lr_scheduler = trainer.linear_warmup_scheduler(optimizer, lr_warmup_steps)
 
     # Ray rollout pipeline initialization (rank 0 manages Ray actors)
     rollout_pipeline: pipeline.RolloutPipeline | None = None
@@ -753,6 +767,7 @@ def main(
         rank=rank,
         world_size=world_size,
         config=engine_config,
+        lr_scheduler=lr_scheduler,
     )
 
     # metric tracking table
@@ -926,6 +941,7 @@ def main(
                     "kl": train_metrics.avg_kl,
                     "clip_fraction": train_metrics.avg_clip_fraction,
                     "grad_norm": train_metrics.avg_grad_norm,
+                    "lr": train_metrics.lr,
                     "logprob_abs_diff": train_metrics.avg_logprob_abs_diff,
                     "mismatch_kl": train_metrics.avg_mismatch_kl,
                     "reward_mean": mean_reward,

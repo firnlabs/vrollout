@@ -5,6 +5,7 @@ import time
 import pytest
 from torch import optim
 
+from vrollout import trainer
 from vrollout.engine import DistributedRLEngine
 from vrollout.scorer import ScoredRollout
 from vrollout.types import Rank
@@ -78,6 +79,21 @@ class TestDistributedRLEngine:
 
         assert metrics.weight_sync_time_s >= sync_delay_s
         assert 0.0 < metrics.train_time_s < sync_delay_s
+
+    def test_train_iteration_forwards_lr_scheduler(
+        self, actor_model, ref_model, scored_rollouts: list[ScoredRollout]
+    ):
+        optimizer = optim.AdamW(actor_model.parameters(), lr=1e-3)
+        dist_engine = DistributedRLEngine(
+            actor=actor_model,
+            reference=ref_model,
+            optimizer=optimizer,
+            lr_scheduler=trainer.linear_warmup_scheduler(optimizer, warmup_steps=2),
+        )
+
+        lrs = [dist_engine.train_iteration(scored_rollouts).lr for _ in range(3)]
+
+        assert lrs == pytest.approx([5e-4, 1e-3, 1e-3])
 
     def test_error_train_iteration(self, engine_builder):
         dist_engine = engine_builder()
