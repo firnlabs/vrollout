@@ -615,3 +615,15 @@ def test_validate_train_temperature_accepts_vllm_range(
     result = train._validate_train_temperature(temperature)
 
     assert result == temperature
+
+
+def test_cli_lr_warmup_steps_rejects_negative() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app, ["--lr-warmup-steps", "-1"], standalone_mode=False
+    )
+
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "lr_warmup_steps"

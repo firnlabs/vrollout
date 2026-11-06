@@ -38,6 +38,7 @@ class TrainStepMetrics:
         mismatch_kl: k3 estimate of KL(pi_old || pi), using pi_old as the sampling
             policy.
         grad_norm: Global L2 norm of the actor gradient before clipping.
+        lr: Learning rate of the actor's first parameter group for this step.
     """
 
     loss: float
@@ -46,6 +47,33 @@ class TrainStepMetrics:
     logprob_abs_diff: float
     mismatch_kl: float
     grad_norm: float
+    lr: float
+
+
+def linear_warmup_scheduler(
+    optimizer: optim.Optimizer, warmup_steps: int
+) -> optim.lr_scheduler.LambdaLR:
+    """Ramps the learning rate linearly over `warmup_steps`, then holds it constant.
+
+    Optimizer step k (0-indexed) uses `lr * min(1, (k + 1) / warmup_steps)`, so the
+    first step already moves the weights and step `warmup_steps - 1` reaches the full
+    rate. Call `scheduler.step()` once after each `optimizer.step()`.
+
+    Args:
+        optimizer: Optimizer whose learning rate is scheduled.
+        warmup_steps: Number of optimizer steps to ramp over; 0 or 1 disables warmup.
+
+    Returns:
+        The scheduler.
+
+    Raises:
+        ValueError: If `warmup_steps` is negative.
+    """
+    if warmup_steps < 0:
+        raise ValueError(f"warmup_steps must be non-negative, got {warmup_steps}")
+    return optim.lr_scheduler.LambdaLR(
+        optimizer, lambda step: min(1.0, (step + 1) / max(warmup_steps, 1))
+    )
 
 
 def _get_target_log_probs(
@@ -114,12 +142,14 @@ class ModelTrainer:
         autocast_dtype: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         temperature: float = 1.0,
+        lr_scheduler: optim.lr_scheduler.LRScheduler | None = None,
     ) -> None:
         if temperature <= 0.0:
             raise ValueError(f"temperature must be positive, got {temperature}")
         self._actor = actor
         self._reference = reference
         self._optimizer = optimizer
+        self._lr_scheduler = lr_scheduler
         self._beta = beta
         self._clip_eps = clip_eps
         self._microbatch_size = microbatch_size
@@ -219,7 +249,10 @@ class ModelTrainer:
         if isinstance(grad_norm, DTensor):
             grad_norm = grad_norm.full_tensor()
 
+        lr = float(self._optimizer.param_groups[0]["lr"])
         self._optimizer.step()
+        if self._lr_scheduler is not None:
+            self._lr_scheduler.step()
 
         if data_parallel:
             # average per-rank metrics: mean_r(sum_r * W / N_all) == sum_all / N_all
@@ -257,4 +290,5 @@ class ModelTrainer:
             logprob_abs_diff=accum_lp_diff,
             mismatch_kl=accum_mismatch_kl,
             grad_norm=grad_norm.item(),
+            lr=lr,
         )

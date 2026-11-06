@@ -387,3 +387,69 @@ async def test_trainer_matches_sampler_log_probs_at_same_temperature(
 
     assert matched == pytest.approx(0.0, abs=1e-6)
     assert unmatched > 1e-4
+
+
+@pytest.mark.parametrize(
+    ("warmup_steps", "expected_factors"),
+    [
+        pytest.param(4, [0.25, 0.5, 0.75, 1.0, 1.0, 1.0], id="warmup_4"),
+        pytest.param(1, [1.0, 1.0, 1.0], id="warmup_1"),
+        pytest.param(0, [1.0, 1.0, 1.0], id="no_warmup"),
+    ],
+)
+def test_linear_warmup_scheduler_ramps_then_holds(
+    warmup_steps: int, expected_factors: list[float]
+) -> None:
+    base_lr = 0.1
+    optimizer = optim.SGD([nn.Parameter(torch.zeros(1))], lr=base_lr)
+    scheduler = tr.linear_warmup_scheduler(optimizer, warmup_steps)
+
+    lrs = []
+    for _ in expected_factors:
+        lrs.append(optimizer.param_groups[0]["lr"])
+        optimizer.step()
+        scheduler.step()
+
+    assert lrs == pytest.approx([base_lr * f for f in expected_factors])
+
+
+def test_linear_warmup_scheduler_rejects_negative_steps() -> None:
+    optimizer = optim.SGD([nn.Parameter(torch.zeros(1))], lr=0.1)
+
+    with pytest.raises(ValueError, match="warmup_steps"):
+        tr.linear_warmup_scheduler(optimizer, -1)
+
+
+def test_train_step_steps_lr_scheduler_and_reports_lr(
+    create_batch: Callable[[], DistributedBatch],
+    actor_model: ToyModel,
+    ref_model: ToyModel,
+) -> None:
+    base_lr = 0.1
+    optimizer = optim.SGD(actor_model.parameters(), lr=base_lr)
+    trainer = tr.ModelTrainer(
+        actor=actor_model,
+        reference=ref_model,
+        optimizer=optimizer,
+        lr_scheduler=tr.linear_warmup_scheduler(optimizer, warmup_steps=3),
+    )
+
+    lrs = [trainer.train_step(create_batch()).lr for _ in range(4)]
+
+    assert lrs == pytest.approx([base_lr / 3, 2 * base_lr / 3, base_lr, base_lr])
+
+
+def test_train_step_reports_constant_lr_without_scheduler(
+    create_batch: Callable[[], DistributedBatch],
+    actor_model: ToyModel,
+    ref_model: ToyModel,
+) -> None:
+    trainer = tr.ModelTrainer(
+        actor=actor_model,
+        reference=ref_model,
+        optimizer=optim.SGD(actor_model.parameters(), lr=0.1),
+    )
+
+    lrs = [trainer.train_step(create_batch()).lr for _ in range(2)]
+
+    assert lrs == pytest.approx([0.1, 0.1])

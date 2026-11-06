@@ -75,6 +75,7 @@ class TrainIterationMetrics:
             iteration.
         weight_sync_time_s: Wall-clock seconds spent extracting and broadcasting
             actor weights to the rollout receivers.
+        lr: Learning rate used by the iteration's last train step.
     """
 
     avg_loss: float
@@ -86,6 +87,7 @@ class TrainIterationMetrics:
     avg_grad_norm: float = 0.0
     train_time_s: float = 0.0
     weight_sync_time_s: float = 0.0
+    lr: float = 0.0
 
 
 def _mean(values: list[float]) -> float:
@@ -105,6 +107,7 @@ class DistributedRLEngine:
         rank: Rank | None = None,
         world_size: WorldSize | None = None,
         config: RLEngineConfig | None = None,
+        lr_scheduler: optim.lr_scheduler.LRScheduler | None = None,
     ):
         if rank is None:
             self._rank = dist.get_rank() if dist.is_initialized() else 0
@@ -132,6 +135,7 @@ class DistributedRLEngine:
             max_grad_norm=self._config.max_grad_norm,
             autocast_dtype=self._config.autocast_dtype,
             temperature=self._config.temperature,
+            lr_scheduler=lr_scheduler,
         )
 
         self._broadcaster = sync.WeightBroadcaster(
@@ -175,4 +179,5 @@ class DistributedRLEngine:
             avg_grad_norm=_mean([m.grad_norm for m in metrics_list]),
             train_time_s=train_time_s,
             weight_sync_time_s=weight_sync_time_s,
+            lr=metrics_list[-1].lr,
         )
