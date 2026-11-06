@@ -13,6 +13,13 @@ from torch import Tensor
 type Rank = int
 type WorldSize = int
 
+# Match temperatures vLLM uses (vllm/sampling_params.py).
+# It raises 0 < T < 0.01 to 0.01 (`_MAX_TEMP`) with only a warning, and rejects
+# T > 2.0. Outside this range, the trainer would end up scaling its logits by a
+# different temperature than the sampler used.
+MIN_SAMPLING_TEMPERATURE = 0.01
+MAX_SAMPLING_TEMPERATURE = 2.0
+
 
 @runtime_checkable
 class SamplingParams(Protocol):

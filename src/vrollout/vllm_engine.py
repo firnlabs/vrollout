@@ -40,6 +40,9 @@ class AsyncVLLMEngine:
                 distributed_executor_backend="uni"
                 if tensor_parallel_size == 1
                 else "mp",
+                # report log-probs of the distribution tokens are sampled from
+                # (after temperature), not of the raw logits
+                logprobs_mode="processed_logprobs",
             )
         )
 

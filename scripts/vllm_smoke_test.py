@@ -4,6 +4,8 @@ Validates that:
 1. vLLM imports cleanly without namespace or driver issues.
 2. Hardware acceleration is active.
 3. The inference engine initializes and successfully emits completion tokens.
+4. vLLM reports log-probs of the temperature-scaled distribution it samples from,
+   which the trainer relies on to score rollouts on-policy.
 """
 
 from __future__ import annotations
@@ -15,12 +17,18 @@ import sys
 import time
 
 import torch
+from torch.nn import functional as F
+import transformers  # type: ignore[import-untyped]
 from vllm import LLM
 from vllm import SamplingParams
 from vllm.platforms import current_platform
 
 DEFAULT_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
 BYTES_TO_GIB = 1024**3
+LOGPROB_CHECK_TEMPERATURE = 0.8
+# vLLM runs in bf16 and the reference in fp32, so they never match exactly; reported
+# log-probs must be at least this much closer to softmax(z / T) than to softmax(z)
+MAX_TEMPERED_TO_RAW_ERROR_RATIO = 0.5
 
 
 @dataclass(frozen=True)
@@ -85,10 +93,85 @@ def detect_backend() -> BackendDiagnostics:
     )
 
 
+@dataclass(frozen=True)
+class LogprobCheck:
+    """Distance of vLLM's reported log-probs from two reference distributions.
+
+    Attributes:
+        num_tokens: Number of sampled tokens compared.
+        err_tempered: Mean |reported - log softmax(z / T)|, the sampling distribution.
+        err_raw: Mean |reported - log softmax(z)|, the untempered distribution.
+    """
+
+    num_tokens: int
+    err_tempered: float
+    err_raw: float
+
+
+def check_logprob_temperature(
+    llm: LLM, model_name: str, prompts: list[str], temperature: float
+) -> LogprobCheck:
+    """Compares vLLM's sampled-token log-probs with an fp32 Hugging Face forward pass.
+
+    The trainer scores tokens under softmax(z / T) and uses the sampler's log-probs as
+    pi_old, so vLLM must report log-probs of that same tempered distribution. Its
+    default `raw_logprobs` mode reports softmax(z) instead, which made T != 1 runs
+    train off-policy without any metric noticing.
+
+    Args:
+        llm: Engine created with `logprobs_mode="processed_logprobs"`, as in
+            `vrollout.vllm_engine.AsyncVLLMEngine`.
+        model_name: Hugging Face identifier of the model `llm` serves.
+        prompts: Prompts to sample from.
+        temperature: Sampling temperature; must differ from 1 to tell the two
+            distributions apart.
+
+    Returns:
+        Mean absolute errors against the tempered and the untempered log-probs.
+    """
+    params = SamplingParams(temperature=temperature, max_tokens=24, logprobs=1, seed=0)
+    outputs = llm.generate(prompts, params)
+    reference = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name, dtype=torch.float32
+    ).eval()
+
+    reported, tempered, raw = [], [], []
+    for output in outputs:
+        completion = output.outputs[0]
+        prompt_ids = list(output.prompt_token_ids or [])
+        token_ids = list(completion.token_ids)
+        assert completion.logprobs is not None, "vLLM returned no log-probs"
+        with torch.no_grad():
+            logits = reference(torch.tensor([prompt_ids + token_ids])).logits[0]
+        # logits at position i predict token i + 1
+        logits = logits[len(prompt_ids) - 1 : -1].float()
+        targets = torch.tensor(token_ids).unsqueeze(-1)
+        tempered.append(
+            F.log_softmax(logits / temperature, -1).gather(-1, targets).squeeze(-1)
+        )
+        raw.append(F.log_softmax(logits, -1).gather(-1, targets).squeeze(-1))
+        reported.append(
+            torch.tensor(
+                [
+                    lp[t].logprob
+                    for lp, t in zip(completion.logprobs, token_ids, strict=True)
+                ]
+            )
+        )
+
+    reported_t, tempered_t, raw_t = (torch.cat(x) for x in (reported, tempered, raw))
+    return LogprobCheck(
+        num_tokens=reported_t.numel(),
+        err_tempered=(reported_t - tempered_t).abs().mean().item(),
+        err_raw=(reported_t - raw_t).abs().mean().item(),
+    )
+
+
 def run_smoke_test(
     model_name: str = DEFAULT_MODEL,
     gpu_memory_utilization: float = 0.6,
     tensor_parallel_size: int = 1,
+    check_logprobs: bool = True,
 ) -> None:
     """Runs hardware backend verification and an end-to-end inference pass.
 
@@ -96,6 +179,8 @@ def run_smoke_test(
         model_name: Hugging Face model identifier to load and test.
         gpu_memory_utilization: Fraction of device memory for KV cache.
         tensor_parallel_size: Number of GPUs for tensor parallelism (CUDA only).
+        check_logprobs: Whether to verify that vLLM reports temperature-scaled
+            log-probs.
     """
     print("=" * 60)
     print("vLLM Universal Smoke Test (Metal / CUDA)")
@@ -132,6 +217,10 @@ def run_smoke_test(
         "max_model_len": 256,
         "gpu_memory_utilization": gpu_memory_utilization,
         "trust_remote_code": True,
+        # same as vrollout.vllm_engine: report log-probs after temperature scaling,
+        # and run eagerly (no CUDA graphs or Inductor compilation)
+        "logprobs_mode": "processed_logprobs",
+        "enforce_eager": True,
     }
 
     # Only pass tensor_parallel_size if CUDA multi-GPU is active
@@ -173,6 +262,29 @@ def run_smoke_test(
         print(f"Generated:   {generated_text}")
         print(f"Tokens:      {num_tokens} tokens\n")
 
+    # 5. Log-prob semantics (the trainer's on-policy contract)
+    if check_logprobs:
+        print("-" * 60)
+        print(
+            f"[*] Checking reported log-probs at T = {LOGPROB_CHECK_TEMPERATURE} "
+            "against an fp32 reference..."
+        )
+        check = check_logprob_temperature(
+            llm, model_name, prompts, LOGPROB_CHECK_TEMPERATURE
+        )
+        print(
+            f"[*] {check.num_tokens} tokens: mean |error| vs softmax(z / T) = "
+            f"{check.err_tempered:.4f}, vs softmax(z) = {check.err_raw:.4f}"
+        )
+        assert check.err_raw > 1e-3, (
+            "Inconclusive: tempered and raw log-probs barely differ for these tokens"
+        )
+        assert check.err_tempered < MAX_TEMPERED_TO_RAW_ERROR_RATIO * check.err_raw, (
+            "vLLM log-probs do not match the temperature-scaled distribution; the "
+            "trainer would score rollouts off-policy at T != 1"
+        )
+        print("[+] Reported log-probs follow the temperature-scaled distribution")
+
     print("=" * 60)
     print("STATUS: ALL SMOKE TESTS PASSED [OK]")
     print("=" * 60)
@@ -200,10 +312,16 @@ if __name__ == "__main__":
         default=1,
         help="Tensor parallel size (CUDA only, default: 1)",
     )
+    parser.add_argument(
+        "--skip-logprob-check",
+        action="store_true",
+        help="Skip checking that vLLM reports temperature-scaled log-probs",
+    )
     args = parser.parse_args()
 
     run_smoke_test(
         model_name=args.model,
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
+        check_logprobs=not args.skip_logprob_check,
     )

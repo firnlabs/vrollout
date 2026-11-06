@@ -45,15 +45,32 @@ class RequestOutput:
     finished: bool
 
 
+# vLLM decodes greedily below this temperature (`_SAMPLING_EPS`); since it raises
+# any positive temperature to at least 0.01 first, in practice only T = 0 is greedy
+_GREEDY_TEMPERATURE_EPS = 1e-5
+
+
+@jaxtyped(typechecker=beartype)
+def _sampling_log_probs(
+    next_token_logits: Float[Tensor, "vocab_size"], temperature: float
+) -> Float[Tensor, "vocab_size"]:
+    """Log-probs of the distribution tokens are drawn from.
+
+    Mirrors vLLM's `processed_logprobs` mode: temperature-scaled when sampling, raw
+    logits when decoding greedily (vLLM skips temperature scaling for greedy).
+    """
+    scale = 1.0 if temperature < _GREEDY_TEMPERATURE_EPS else temperature
+    return F.log_softmax(next_token_logits / scale, dim=-1)
+
+
 @jaxtyped(typechecker=beartype)
 def _sample_next_token(
-    next_token_logits: Float[Tensor, "vocab_size"], temperature: float
+    log_probs: Float[Tensor, "vocab_size"], temperature: float
 ) -> int:
-    if temperature < 1e-4:
-        return int(torch.argmax(next_token_logits).item())
+    if temperature < _GREEDY_TEMPERATURE_EPS:
+        return int(torch.argmax(log_probs).item())
 
-    probs = F.softmax(next_token_logits / temperature, dim=-1)
-    return int(torch.multinomial(probs, num_samples=1).item())
+    return int(torch.multinomial(log_probs.exp(), num_samples=1).item())
 
 
 class AsciiTokenizer:
@@ -116,8 +133,8 @@ class MockAsyncLLMEngine:
                 inputs = torch.tensor([curr_tokens], dtype=torch.long)
                 logits = self.model(inputs)
                 next_token_logits = logits[0, -1, :]  # (1, vocab_size)
-                next_token = _sample_next_token(next_token_logits, temperature)
-                logprobs = F.log_softmax(next_token_logits, dim=-1)
+                logprobs = _sampling_log_probs(next_token_logits, temperature)
+                next_token = _sample_next_token(logprobs, temperature)
                 next_token_logprob = float(logprobs[next_token].item())
 
                 completion_tokens.append(next_token)
