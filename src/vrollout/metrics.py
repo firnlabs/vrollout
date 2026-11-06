@@ -45,10 +45,10 @@ class RolloutMetrics:
             scored as correct, so a rising rate wastes samples and biases rewards.
         entropy_proxy: Mean negative log-prob per sampled token, as reported by the
             sampler. Estimates the policy's per-token entropy without an extra
-            forward pass, to detect entropy collapse (loss of exploration). vLLM
-            reports log-probs before temperature scaling, so at T != 1 it is the
-            cross-entropy of tempered samples under the untempered policy. It is
-            0.0 when the batch has no completion tokens.
+            forward pass, to detect entropy collapse (loss of exploration). The
+            sampler reports log-probs after temperature scaling, so at T != 1 it
+            estimates the entropy of the tempered policy. It is 0.0 when the batch
+            has no completion tokens.
         zero_advantage_group_frac: Fraction of prompt groups whose advantages are
             all zero, i.e. every completion got the same reward. These groups give
             no policy-gradient signal, so a high value means most of the batch is

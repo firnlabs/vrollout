@@ -51,11 +51,15 @@ class TrainStepMetrics:
 def _get_target_log_probs(
     logits_chunk: Float[Tensor, "batch chunk vocab"],
     targets_chunk: Int[Tensor, "batch chunk"],
+    temperature: float = 1.0,
 ) -> Float[Tensor, "batch chunk"]:
     # upcast to float32 for numerical stability in logsumexp
     logits_chunk = logits_chunk.to(
         torch.promote_types(logits_chunk.dtype, torch.float32)
     )
+    # score tokens under softmax(z / T), the distribution the sampler drew them from
+    if temperature != 1.0:
+        logits_chunk = logits_chunk / temperature
     target_logits = logits_chunk.gather(
         dim=-1, index=targets_chunk.unsqueeze(-1)
     ).squeeze(-1)
@@ -67,6 +71,7 @@ def _compute_logprobs(
     model: nn.Module,
     dist_batch: DistributedBatch,
     chunk_size: int = 128,
+    temperature: float = 1.0,
 ) -> Float[Tensor, "batch seq_len_minus_1"]:
     outputs = model(dist_batch.input_ids, attention_mask=dist_batch.attention_mask)
     logits = outputs.logits if hasattr(outputs, "logits") else outputs
@@ -84,10 +89,10 @@ def _compute_logprobs(
     ):
         if use_ckpt:
             chunk = checkpoint.checkpoint(
-                _get_target_log_probs, lc, tc, use_reentrant=False
+                _get_target_log_probs, lc, tc, temperature, use_reentrant=False
             )
         else:
-            chunk = _get_target_log_probs(lc, tc)
+            chunk = _get_target_log_probs(lc, tc, temperature)
         chunks.append(chunk)
 
     return torch.cat(chunks, dim=1)
@@ -108,7 +113,10 @@ class ModelTrainer:
         logit_chunk_size: int = 128,
         autocast_dtype: torch.dtype | None = None,
         max_grad_norm: float | None = None,
+        temperature: float = 1.0,
     ) -> None:
+        if temperature <= 0.0:
+            raise ValueError(f"temperature must be positive, got {temperature}")
         self._actor = actor
         self._reference = reference
         self._optimizer = optimizer
@@ -118,6 +126,14 @@ class ModelTrainer:
         self._logit_chunk_size = logit_chunk_size
         self._max_grad_norm = max_grad_norm
         self._autocast_dtype = autocast_dtype
+        self._temperature = temperature
+
+    def _logprobs(
+        self, model: nn.Module, mb: DistributedBatch
+    ) -> Float[Tensor, "batch seq_len_minus_1"]:
+        return _compute_logprobs(
+            model, mb, self._logit_chunk_size, temperature=self._temperature
+        )
 
     def _autocast(self) -> torch.autocast:
         device_type = next(self._actor.parameters()).device.type
@@ -159,8 +175,7 @@ class ModelTrainer:
         # reference model forward
         with torch.no_grad(), self._autocast():
             ref_logprobs_list = [
-                _compute_logprobs(self._reference, mb, self._logit_chunk_size)
-                for mb in microbatches
+                self._logprobs(self._reference, mb) for mb in microbatches
             ]
 
         # actor model forward, loss, and gradient step. Every microbatch's forward runs
@@ -175,7 +190,7 @@ class ModelTrainer:
 
         for mb, ref_lps in zip(microbatches, ref_logprobs_list, strict=True):
             with self._autocast():
-                actor_lps = _compute_logprobs(self._actor, mb, self._logit_chunk_size)
+                actor_lps = self._logprobs(self._actor, mb)
 
             loss, metrics = grpo.compute_grpo_loss(
                 log_probs=actor_lps,

@@ -37,6 +37,8 @@ class RLEngineConfig:
             disable clipping.
         autocast_dtype: Dtype for autocast in the forward pass, or None to run in
             the model's native precision.
+        temperature: Sampling temperature of the training rollouts; the trainer
+            divides logits by this value so its log-probs match the sampler's.
     """
 
     pad_token_id: int = 0
@@ -48,6 +50,7 @@ class RLEngineConfig:
     logit_chunk_size: int = 128
     max_grad_norm: float | None = 1.0
     autocast_dtype: torch.dtype | None = None
+    temperature: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,7 @@ class DistributedRLEngine:
             logit_chunk_size=self._config.logit_chunk_size,
             max_grad_norm=self._config.max_grad_norm,
             autocast_dtype=self._config.autocast_dtype,
+            temperature=self._config.temperature,
         )
 
         self._broadcaster = sync.WeightBroadcaster(

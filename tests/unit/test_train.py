@@ -590,3 +590,28 @@ def test_cli_chat_template_rejects_mock_backend() -> None:
     )
 
     assert isinstance(result.exception, typer.BadParameter)
+
+
+@pytest.mark.parametrize("temperature", ["0.0", "-0.5", "5e-6", "0.005", "2.5"])
+def test_cli_temperature_rejects_values_outside_vllm_range(temperature: str) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        train.app, ["--temperature", temperature], standalone_mode=False
+    )
+
+    assert isinstance(result.exception, typer.BadParameter)
+    assert result.exception.param is not None
+    assert result.exception.param.name == "temperature"
+
+
+@pytest.mark.parametrize(
+    "temperature",
+    [types.MIN_SAMPLING_TEMPERATURE, 0.3, 1.0, 1.5, types.MAX_SAMPLING_TEMPERATURE],
+)
+def test_validate_train_temperature_accepts_vllm_range(
+    temperature: float,
+) -> None:
+    result = train._validate_train_temperature(temperature)
+
+    assert result == temperature

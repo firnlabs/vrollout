@@ -132,6 +132,7 @@ class TestAsyncVLLMEngine:
             max_num_seqs=128,
             seed=42,
             distributed_executor_backend="mp",
+            logprobs_mode="processed_logprobs",
         )
 
     def test_init_defaults_uniproc_and_eager_for_single_gpu(self, mocker):
@@ -154,6 +155,7 @@ class TestAsyncVLLMEngine:
             max_num_seqs=None,
             seed=0,
             distributed_executor_backend="uni",
+            logprobs_mode="processed_logprobs",
         )
 
     @pytest.mark.asyncio

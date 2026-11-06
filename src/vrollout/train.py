@@ -209,6 +209,42 @@ def _save_eval_rows(
     return path
 
 
+def _validate_train_temperature(temperature: float) -> float:
+    """Rejects rollout temperatures the sampler would not use.
+
+    The trainer divides its logits by the rollout temperature so that its log-probs
+    describe the same distribution the sampler drew tokens from. That only holds if
+    vLLM samples at exactly this temperature, which it does for
+    `[types.MIN_SAMPLING_TEMPERATURE, types.MAX_SAMPLING_TEMPERATURE]`:
+
+    - T = 0 decodes greedily, which vLLM rejects for groups of more than one
+      completion. Identical completions (e.g. G = 1) would also get identical rewards
+      and so zero advantage.
+    - 0 < T < 0.01 is silently raised to 0.01 by vLLM, so the trainer would scale
+      by a different temperature than the sampler used.
+    - T > 2.0 is rejected by vLLM, which would only fail at the first rollout.
+
+    Out-of-range values are rejected rather than clamped, so a run never trains at
+    a temperature other than the one requested.
+
+    Args:
+        temperature: Requested rollout sampling temperature.
+
+    Returns:
+        `temperature`, if it is in the supported range.
+
+    Raises:
+        typer.BadParameter: If `temperature` is outside the supported range.
+    """
+    lo, hi = types.MIN_SAMPLING_TEMPERATURE, types.MAX_SAMPLING_TEMPERATURE
+    if not lo <= temperature <= hi:
+        raise typer.BadParameter(
+            f"got {temperature}; training rollouts need a temperature in "
+            f"[{lo}, {hi}], the range vLLM samples at exactly as requested"
+        )
+    return temperature
+
+
 def _should_evaluate(step: int, every: int, num_iterations: int) -> bool:
     """Returns whether to evaluate after 1-indexed `step`: every N steps, and the last.
 
@@ -372,7 +408,16 @@ def main(
     max_seq_len: int = typer.Option(
         512, help="Maximum total sequence length (prompt + completion) for vLLM"
     ),
-    temperature: float = typer.Option(0.8, help="Sampling temperature"),
+    temperature: float = typer.Option(
+        1.0,
+        callback=_validate_train_temperature,
+        help=(
+            "Sampling temperature for training rollouts, also applied to the "
+            f"trainer's logits; must be in [{types.MIN_SAMPLING_TEMPERATURE}, "
+            f"{types.MAX_SAMPLING_TEMPERATURE}] (evaluation always decodes "
+            "greedily)"
+        ),
+    ),
     enforce_eager: bool = typer.Option(
         True, help="Disable CUDA graph capture and Inductor compilation in vLLM"
     ),
@@ -692,6 +737,7 @@ def main(
         micro_batch_size=micro_batch_size,
         logit_chunk_size=logit_chunk_size,
         max_grad_norm=max_grad_norm,
+        temperature=temperature,
         autocast_dtype=(
             torch.bfloat16
             if (device.type == "cuda" and torch.cuda.is_bf16_supported())

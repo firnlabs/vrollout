@@ -12,9 +12,14 @@ from torch import optim
 from torch import Tensor
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
+from torch.nn import functional as F
 
+from vrollout import buffer as vb
+from vrollout import generation
 from vrollout import trainer as tr
 from vrollout.buffer import DistributedBatch
+from vrollout.scorer import ScoredRollout
+from vrollout.testing import MockAsyncLLMEngine
 from vrollout.testing.models import ToyModel
 from vrollout.types import Rank
 from vrollout.types import WorldSize
@@ -297,3 +302,88 @@ def test_train_step_mismatch_is_zero_when_old_policy_matches_current(
     assert metrics.logprob_abs_diff == pytest.approx(0.0, abs=1e-6)
     assert metrics.mismatch_kl == pytest.approx(0.0, abs=1e-6)
     assert metrics.clip_fraction == 0.0
+
+
+@pytest.mark.parametrize("temperature", [0.5, 1.0, 1.7])
+def test_compute_logprobs_scores_tokens_under_tempered_softmax(
+    temperature: float,
+    ref_model: ToyModel,
+    distributed_batch_factory: Callable[[int, int], DistributedBatch],
+) -> None:
+    dist_batch = distributed_batch_factory(3, 11)
+
+    with torch.no_grad():
+        result = tr._compute_logprobs(
+            ref_model, dist_batch, chunk_size=4, temperature=temperature
+        )
+
+    with torch.no_grad():
+        logits = ref_model(dist_batch.input_ids)[:, :-1, :]
+    expected = (
+        F.log_softmax(logits / temperature, dim=-1)
+        .gather(-1, dist_batch.input_ids[:, 1:].unsqueeze(-1))
+        .squeeze(-1)
+    )
+    torch.testing.assert_close(result, expected)
+
+
+@pytest.mark.parametrize("temperature", [0.0, -1.0])
+def test_trainer_rejects_non_positive_temperature(
+    temperature: float, actor_model: ToyModel, ref_model: ToyModel
+) -> None:
+    optimizer = optim.SGD(actor_model.parameters(), lr=0.0)
+
+    with pytest.raises(ValueError, match="temperature"):
+        tr.ModelTrainer(
+            actor=actor_model,
+            reference=ref_model,
+            optimizer=optimizer,
+            temperature=temperature,
+        )
+
+
+@dataclasses.dataclass
+class _SamplingParams:
+    temperature: float
+    max_tokens: int = 6
+    logprobs: int = 1
+    group_size: int = 3
+
+
+async def _sample_batch(model: nn.Module, temperature: float) -> DistributedBatch:
+    engine = MockAsyncLLMEngine(model=model, model_name="test-model")
+    output = await anext(
+        engine.generate("prompt", _SamplingParams(temperature=temperature), "req-0")
+    )
+    rollouts = [
+        ScoredRollout(reward=float(i), trajectory=traj)
+        for i, traj in enumerate(generation._parse_vllm_output_to_rollouts(output, 0))
+    ]
+    return vb.DistributedRolloutBuffer(rollouts, group_size=3).get_rank_batch(0, 1)
+
+
+def _mismatch_kl(
+    actor: nn.Module, ref: nn.Module, batch: DistributedBatch, temperature: float
+) -> float:
+    trainer = tr.ModelTrainer(
+        actor=actor,
+        reference=ref,
+        optimizer=optim.SGD(actor.parameters(), lr=0.0),
+        temperature=temperature,
+    )
+    return trainer.train_step(batch).mismatch_kl
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("temperature", [0.6, 1.0, 1.5])
+async def test_trainer_matches_sampler_log_probs_at_same_temperature(
+    temperature: float, actor_model: ToyModel, ref_model: ToyModel
+) -> None:
+    torch.manual_seed(0)
+    batch = await _sample_batch(actor_model, temperature)
+
+    matched = _mismatch_kl(actor_model, ref_model, batch, temperature)
+    unmatched = _mismatch_kl(actor_model, ref_model, batch, temperature * 2)
+
+    assert matched == pytest.approx(0.0, abs=1e-6)
+    assert unmatched > 1e-4
