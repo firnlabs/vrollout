@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ base_label }} vs {{ candidate_label }}</title>
+{#- Inlined, not <link>ed, so the generated page stays a single portable file. #}
+<style>
+{% include "compare_evals.css" %}
+</style>
+</head>
+<body>
+{%- macro answer_cell(answer) %}
+<td class="{{ 'right' if answer.correct else 'wrong' }}">
+  <div class="verdict">{{ '✓' if answer.correct else '✗' }}
+    <b>{{ answer.answer if answer.answer is not none else '—' }}</b>
+    {%- if answer.finish_reason == 'length' %} <span class="tag">truncated</span>{% endif %}
+    <span class="len">{{ answer.length }} tok</span></div>
+  <details><summary>answer</summary><pre>{{ answer.completion }}</pre></details>
+</td>
+{%- endmacro %}
+<header>
+  <h1>{{ base_label }} vs {{ candidate_label }}</h1>
+  <p class="sub">{{ headline }} · {{ scoring }} scoring</p>
+  <button data-filter="all" class="on">all ({{ problems | length }})</button>
+  {%- for outcome, count in counts.items() %}
+  <button data-filter="{{ outcome }}">{{ outcome }} ({{ count }})</button>
+  {%- endfor %}
+</header>
+<table>
+<thead><tr><th class="idx">#</th><th>Prompt</th><th class="gt">Ground truth</th>
+  <th>{{ base_label }}</th><th>{{ candidate_label }}</th></tr></thead>
+<tbody>
+{%- for p in problems %}
+<tr data-outcome="{{ p.outcome }}">
+  <td class="idx">{{ loop.index0 }}</td>
+  <td><pre>{{ p.prompt | question_text }}</pre></td>
+  <td><b>{{ p.ground_truth or '—' }}</b></td>
+  {{- answer_cell(p.base) }}
+  {{- answer_cell(p.candidate) }}
+</tr>
+{%- endfor %}
+</tbody>
+</table>
+<script>
+document.querySelectorAll("button[data-filter]").forEach(b => b.onclick = () => {
+  document.querySelectorAll("button[data-filter]").forEach(x =>
+    x.classList.toggle("on", x === b));
+  const f = b.dataset.filter;
+  document.querySelectorAll("tbody tr").forEach(r =>
+    r.hidden = f !== "all" && r.dataset.outcome !== f);
+});
+</script>
+</body>
+</html>
