@@ -132,9 +132,9 @@ Below are the benchmarking results from 2x T4 GPU accelerators in Kaggle Noteboo
 
 The screenshot below shows the training iterations table of a single-GPU GRPO run on `Qwen/Qwen2.5-0.5B-Instruct` on one NVIDIA L4 GPU (trainer and vLLM rollout worker sharing the GPU), alongside the deterministic before-and-after qualitative evaluation. Note that this run predates FSDP2 data-parallel training.
 
-![vRollout GRPO Training Progress and Qualitative Evaluation](docs/assets/gsm8k-training-eval.png)
+![vRollout GRPO Training Progress and Qualitative Evaluation](docs/reports/2026-10-21-grpo-gsm8k-l4/gsm8k-training-eval.png)
 
-The full results can be found in the [GSM8K Training Report](docs/reports/gsm8k-training-report.md).
+The full results can be found in the [GSM8K Training Report](docs/reports/2026-10-21-grpo-gsm8k-l4/gsm8k-training-report.md).
 
 ---
 
