@@ -1,9 +1,14 @@
-"""Exports a W&B training history to CSV and plots it as a grid of small multiples.
+"""Exports a W&B training history to CSV and plots it for the report.
+
+Writes two figures: training dynamics as a two-column grid of small multiples, and
+the per-phase step time. Two columns keep the labels legible at the ~880 px width
+of GitHub's rendered Markdown.
 
 To generate the plots:
     uv run --group notebook scripts/plot_training_history.py plot \
         docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-history.csv \
-        -o docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-training.png
+        -o docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-training.png \
+        --step-time-output docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-step-time.png
 """
 
 import csv
@@ -54,6 +59,9 @@ RAW = "#b9b8b3"
 
 NUM_STEPS = 200
 SMOOTH_WINDOW = 10
+NUM_EVAL_PROBLEMS = 500
+DPI = 150
+Z_95 = 1.96
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -89,11 +97,11 @@ def _rolling_mean(values: np.ndarray, window: int) -> np.ndarray:
 
 def _style(ax: Axes, title: str, unit: str) -> None:
     ax.set_facecolor(SURFACE)
-    ax.set_title(title, loc="left", fontsize=11, color=INK, pad=6)
-    ax.set_ylabel(unit, fontsize=9, color=INK_MUTED)
+    ax.set_title(title, loc="left", fontsize=12, color=INK, pad=6)
+    ax.set_ylabel(unit, fontsize=10, color=INK_MUTED)
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.tick_params(colors=INK_MUTED, labelsize=8, length=0)
+    ax.tick_params(colors=INK_MUTED, labelsize=9, length=0)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
     ax.spines["bottom"].set_color(GRID)
@@ -110,14 +118,29 @@ def _plot_smoothed(
 
 
 def _plot_eval(ax: Axes, steps: np.ndarray, accuracy: np.ndarray) -> None:
-    """Plots eval accuracy at the steps where it was measured.
+    """Plots eval accuracy at the steps where it was measured, with a 95% CI band.
 
-    Labels the first point (the E0 baseline) and the last.
+    The band is the binomial (Wald) 95% confidence interval over the eval problems,
+    matching the intervals quoted in the report. It treats each point on its own;
+    paired comparisons between two steps are tighter.
     """
-    _style(ax, "Greedy eval accuracy (strict, n = 500)", "accuracy (SE ≈ 0.022)")
+    _style(
+        ax,
+        f"Greedy eval accuracy (strict, n = {NUM_EVAL_PROBLEMS})",
+        "accuracy (band: 95% CI)",
+    )
     ax.margins(y=0.12)
     measured = ~np.isnan(accuracy)
     steps, accuracy = steps[measured], accuracy[measured]
+    half_width = Z_95 * np.sqrt(accuracy * (1 - accuracy) / NUM_EVAL_PROBLEMS)
+    ax.fill_between(
+        steps,
+        accuracy - half_width,
+        accuracy + half_width,
+        color=SERIES[0],
+        alpha=0.15,
+        linewidth=0,
+    )
     ax.plot(
         steps,
         accuracy,
@@ -128,13 +151,13 @@ def _plot_eval(ax: Axes, steps: np.ndarray, accuracy: np.ndarray) -> None:
         markeredgecolor=SURFACE,
         markeredgewidth=1.5,
     )
-    label_style = {"textcoords": "offset points", "fontsize": 8, "color": INK_MUTED}
+    label_style = {"textcoords": "offset points", "fontsize": 9, "color": INK_MUTED}
     ax.annotate(
-        f"E0 {accuracy[0]:.3f}",
+        f"step 0: {accuracy[0]:.3f}",
         (steps[0], accuracy[0]),
-        xytext=(8, 2),
+        xytext=(6, -8),
         ha="left",
-        va="bottom",
+        va="top",
         **label_style,
     )
     ax.annotate(
@@ -150,12 +173,16 @@ def _plot_eval(ax: Axes, steps: np.ndarray, accuracy: np.ndarray) -> None:
 def _plot_step_time(
     ax: Axes, steps: np.ndarray, phase_times: dict[str, np.ndarray]
 ) -> None:
-    """Stacks the smoothed time of each step phase, labelled with its median."""
-    _style(ax, "Step time (10-step mean)", "seconds")
+    """Stacks the smoothed time of each step phase, labelled with its median.
+
+    The labels are medians of the raw per-step times, matching the numbers quoted
+    in the report, not of the smoothed layers drawn.
+    """
+    _style(ax, f"Step time per phase ({SMOOTH_WINDOW}-step mean)", "seconds")
     layers = [_rolling_mean(t, SMOOTH_WINDOW) for t in phase_times.values()]
     ax.stackplot(steps, layers, colors=SERIES, edgecolor=SURFACE, linewidth=1.0)
 
-    medians = np.array([np.nanmedian(layer) for layer in layers])
+    medians = np.array([np.nanmedian(t) for t in phase_times.values()])
     centers = np.cumsum(medians) - medians / 2
     for label, median, center in zip(phase_times, medians, centers, strict=True):
         ax.text(
@@ -164,7 +191,7 @@ def _plot_step_time(
             f"{label} {median:.1f} s",
             ha="right",
             va="center",
-            fontsize=8,
+            fontsize=10,
             color=INK,
         )
 
@@ -190,21 +217,39 @@ def export(
     typer.echo(f"wrote {len(records)} rows to {output}")
 
 
+def _save(fig: plt.Figure, output: pathlib.Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, dpi=DPI, facecolor=SURFACE)
+    plt.close(fig)
+    typer.echo(f"wrote {output}")
+
+
 @app.command()
 def plot(
     history_csv: Annotated[pathlib.Path, typer.Argument(exists=True, dir_okay=False)],
-    output: Annotated[pathlib.Path, typer.Option("--output", "-o")],
+    output: Annotated[
+        pathlib.Path, typer.Option("--output", "-o", help="Training dynamics figure")
+    ],
+    step_time_output: Annotated[
+        pathlib.Path, typer.Option("--step-time-output", help="Step time figure")
+    ],
 ) -> None:
-    """Plots reward, eval accuracy, NLL, KL, truncation and step time."""
+    """Plots training dynamics and step time as two separate figures."""
     history = _read_columns(history_csv)
     steps = history["step"]
     # Step 0 holds only the pre-training eval; training metrics start at step 1.
     is_train = steps >= 1
     train = {name: values[is_train] for name, values in history.items()}
 
-    fig, axes = plt.subplots(2, 3, figsize=(13, 7), layout="constrained")
+    fig, axes = plt.subplots(4, 2, figsize=(9, 13), layout="constrained")
     fig.patch.set_facecolor(SURFACE)
-    (ax_reward, ax_eval, ax_nll), (ax_kl, ax_trunc, ax_time) = axes
+    (
+        (ax_reward, ax_eval),
+        (ax_nll, ax_kl),
+        (ax_trunc, ax_format),
+        (ax_length, ax_unused),
+    ) = axes
+    ax_unused.set_visible(False)
 
     _plot_smoothed(
         ax_reward, train["step"], train["reward_mean"], "Training reward", "mean reward"
@@ -225,25 +270,41 @@ def plot(
         "Truncated rollouts",
         "% of rollouts",
     )
+    _plot_smoothed(
+        ax_format,
+        train["step"],
+        train["format_compliance_rate"] * 100,
+        "Format-compliant rollouts",
+        "% of rollouts",
+    )
+    _plot_smoothed(
+        ax_length,
+        train["step"],
+        train["response_length_mean"],
+        "Mean rollout length",
+        "tokens",
+    )
+    for ax in (ax_format, ax_length):
+        ax.set_xlabel("training step", fontsize=10, color=INK_MUTED)
+    fig.suptitle(
+        f"E1 training, {NUM_STEPS} steps (grey: per step, blue: "
+        f"{SMOOTH_WINDOW}-step mean)",
+        x=0.01,
+        ha="left",
+        fontsize=13,
+        color=INK,
+    )
+    _save(fig, output)
+
+    fig, ax = plt.subplots(figsize=(9, 3.5), layout="constrained")
+    fig.patch.set_facecolor(SURFACE)
     _plot_step_time(
-        ax_time,
+        ax,
         train["step"],
         {label: train[column] for label, column in STEP_TIME_PHASES},
     )
-
-    for ax in axes[1]:
-        ax.set_xlabel("training step", fontsize=9, color=INK_MUTED)
-    fig.suptitle(
-        f"E1: sync GRPO on Qwen2.5-0.5B-Instruct, GSM8K, {NUM_STEPS} steps "
-        f"(grey: per step, blue: {SMOOTH_WINDOW}-step mean)",
-        x=0.01,
-        ha="left",
-        fontsize=12,
-        color=INK,
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output, dpi=150, facecolor=SURFACE)
-    typer.echo(f"wrote {output}")
+    ax.set_xlabel("training step", fontsize=10, color=INK_MUTED)
+    _save(fig, step_time_output)
 
 
 if __name__ == "__main__":
