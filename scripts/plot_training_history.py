@@ -1,14 +1,16 @@
 """Exports a W&B training history to CSV and plots it for the report.
 
-Writes two figures: training dynamics as a two-column grid of small multiples, and
-the per-phase step time. Two columns keep the labels legible at the ~880 px width
-of GitHub's rendered Markdown.
+Writes two report figures: training dynamics as a two-column grid of small
+multiples, and the per-phase step time. Two columns keep the labels legible at the
+~880 px width of GitHub's rendered Markdown. Optionally also writes a two-panel
+summary (training reward and KL) for the README.
 
 To generate the plots:
     uv run --group notebook scripts/plot_training_history.py plot \
         docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-history.csv \
         -o docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-training.png \
-        --step-time-output docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-step-time.png
+        --step-time-output docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-step-time.png \
+        --summary-output docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-summary.png
 """
 
 import csv
@@ -224,6 +226,26 @@ def _save(fig: plt.Figure, output: pathlib.Path) -> None:
     typer.echo(f"wrote {output}")
 
 
+def _plot_summary(train: dict[str, np.ndarray], output: pathlib.Path) -> None:
+    """Plots training reward and KL side by side, the README's headline figure."""
+    fig, (ax_reward, ax_kl) = plt.subplots(1, 2, figsize=(9, 3.4), layout="constrained")
+    fig.patch.set_facecolor(SURFACE)
+    _plot_smoothed(
+        ax_reward, train["step"], train["reward_mean"], "Training reward", "mean reward"
+    )
+    _plot_smoothed(ax_kl, train["step"], train["kl"], "KL to reference", "KL")
+    for ax in (ax_reward, ax_kl):
+        ax.set_xlabel("training step", fontsize=10, color=INK_MUTED)
+    fig.suptitle(
+        f"grey: per step, blue: {SMOOTH_WINDOW}-step mean",
+        x=0.01,
+        ha="left",
+        fontsize=10,
+        color=INK_MUTED,
+    )
+    _save(fig, output)
+
+
 @app.command()
 def plot(
     history_csv: Annotated[pathlib.Path, typer.Argument(exists=True, dir_okay=False)],
@@ -233,8 +255,12 @@ def plot(
     step_time_output: Annotated[
         pathlib.Path, typer.Option("--step-time-output", help="Step time figure")
     ],
+    summary_output: Annotated[
+        pathlib.Path | None,
+        typer.Option("--summary-output", help="Two-panel README figure"),
+    ] = None,
 ) -> None:
-    """Plots training dynamics and step time as two separate figures."""
+    """Plots training dynamics and step time, and optionally the README summary."""
     history = _read_columns(history_csv)
     steps = history["step"]
     # Step 0 holds only the pre-training eval; training metrics start at step 1.
@@ -305,6 +331,9 @@ def plot(
     )
     ax.set_xlabel("training step", fontsize=10, color=INK_MUTED)
     _save(fig, step_time_output)
+
+    if summary_output is not None:
+        _plot_summary(train, summary_output)
 
 
 if __name__ == "__main__":

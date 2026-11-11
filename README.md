@@ -130,11 +130,34 @@ Below are the benchmarking results from 2x T4 GPU accelerators in Kaggle Noteboo
 
 ## GSM8K results
 
-The screenshot below shows the training iterations table of a single-GPU GRPO run on `Qwen/Qwen2.5-0.5B-Instruct` on one NVIDIA L4 GPU (trainer and vLLM rollout worker sharing the GPU), alongside the deterministic before-and-after qualitative evaluation. Note that this run predates FSDP2 data-parallel training.
+`Qwen/Qwen2.5-0.5B-Instruct` was trained with synchronous GRPO for 200 steps on 6,400 GSM8K training problems (32 prompts × G = 8 per step, T = 1.0, lr 1e-6), with 2x A40 GPUs (trainer and vLLM rollout worker on separate GPUs).
+The untrained model (E0) and the step-200 checkpoint (E1) were evaluated on all 1,319 test problems with greedy decoding and strict scoring.
 
-![vRollout GRPO Training Progress and Qualitative Evaluation](docs/reports/2026-10-21-grpo-gsm8k-l4/gsm8k-training-eval.png)
+| Model | Strict accuracy | Lenient accuracy | Truncated |
+| --- | --- | --- | --- |
+| E0 (untrained) | 0.488 | 0.496 | 5.1% |
+| E1 (step 200) | 0.527 | 0.531 | 4.3% |
 
-The full results can be found in the [GSM8K Training Report](docs/reports/2026-10-21-grpo-gsm8k-l4/gsm8k-training-report.md).
+- **Accuracy**: +3.9 points strict (95% CI ±2.2; 137 problems gained, 86 lost; exact McNemar p = 0.0008).
+  E0 matches the 49.6 reported for this model in the Qwen2.5 technical report.
+- **Eval noise**: Repeating the greedy eval of the same model in a new vLLM engine flipped the verdict on 8–11% of problems, most likely because vLLM's kernels are not batch-invariant.
+  The confidence interval does not include this run-to-run spread.
+- **Step time**: The median step took 51.2 s: rollout 17.5 s, training 26.4 s and weight sync 7.2 s.
+  In synchronous mode each GPU sits idle while the other works.
+- **Temperature bug**: Earlier runs at T = 0.8 collapsed because vLLM and the trainer both scored tokens at T = 1.0, making training silently off-policy.
+  PR #72 fixed the mismatch.
+
+### Training curves
+
+![E1 training reward and KL to the reference model over 200 GRPO steps](docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-summary.png)
+
+Training reward rose from 0.48 to 0.58, mostly in the first 75 steps and the last 25.
+KL to the reference model rose from 0.0006 to 0.0066 and was flat over the last 50 steps.
+Start and end values are means over the first and last 25 steps.
+
+The setup, analysis and reproduction commands are in the [E0/E1 GRPO GSM8K report](docs/reports/2026-11-06-e0-e1-grpo-gsm8k/e1-report.md).
+
+Earlier runs are in [docs/reports/](docs/reports/).
 
 ---
 
