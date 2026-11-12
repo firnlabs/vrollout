@@ -9,7 +9,8 @@ This report analyzes the post-training run of **Qwen2.5-0.5B-Instruct** using Gr
 ### Key findings
 
 1. Expanding the token budget to 320 tokens (`--max-tokens 320`) and sequence length to 768 tokens (`--max-seq-len 768`) eliminated mid-sentence truncation without GPU out-of-memory (OOM) errors, enabling complete chain-of-thought solutions terminating with `\boxed{...}` tags.
-2. Decoupled Ray-vLLM weight reloading across shared TMPFS averaged **0.455 seconds** per iteration (< 3.8% of total iteration time), confirming near-zero synchronization overhead between the PyTorch trainer and vLLM rollout worker on a single GPU.
+2. vLLM's in-place weight reload from shared TMPFS averaged **0.455 seconds** per iteration (< 3.8% of total iteration time).
+   This is only the last stage of weight sync; the full sync path was not timed in this run (see the [correction](#weights-update-latency) below).
 3. Policy updates remained tightly bounded across all 15 iterations, with KL divergence contained between 0.0000 and 0.0204 and PPO clipping fractions consistently under 0.55%.
 4. Completions unlocked non-zero group variance, producing rollout mean rewards up to 0.875 (iterations 1 and 7) and sustained rewards between 0.500 and 0.750 (averaging 0.650) across late iterations (11-15).
 5. The policy successfully acquired multi-step aggregation capability (e.g., solving the two-stage sprint distance problem), while also displaying characteristic exploratory trade-offs (such as symbolic over-parameterization and arithmetic shortcuts).
@@ -181,7 +182,27 @@ Josh decides to try flipping a house. He buys a house for $80,000 and then puts 
 
 ### Weights update latency
 
-vRollout writes policy weights to a shared TMPFS volume and executes an in-place tensor reload inside the vLLM engine actor:
+vRollout writes policy weights to a shared TMPFS volume and executes an in-place tensor reload inside the vLLM engine actor.
+
+> [!NOTE]
+> **Correction (2026-11-12):** the 0.455 s is vLLM's own `Reloading and processing weights` log line, which times only the reload from TMPFS.
+> It leaves out the rest of vRollout's weight sync: gathering the weights to CPU, passing them through the Ray object store, and writing the safetensors file to `/dev/shm`.
+> This run did not time those stages, so the 0.455 s understates the sync cost.
+>
+> Later runs logged both the reload line and the full sync time (`weight_sync_time_s`):
+>
+> | Run | GPUs | vLLM reload (log line) | Full weight sync |
+> | :--- | :--- | :---: | :---: |
+> | This report | 1× L4 | 0.455 s | not measured |
+> | E1 timing smoke run | 2× RTX 4090 | 0.40 s | 5.1 s |
+> | E1 ([report](../2026-11-06-e0-e1-grpo-gsm8k/e1-report.md)) | 2× A40 | 0.67 s | 7.2 s |
+>
+> In both measured runs about 90% of the sync time was outside the vLLM reload.
+> In those runs the reload checkpoint is 1.84 GiB because the trainer sends its weights in fp32.
+> This L4 run predates the fp32 trainer change, so it sent bf16 weights, the same 0.92 GiB as the initial model load in the setup table.
+> Its 0.455 s reload therefore moved about half as many bytes as the reloads in the later runs.
+
+vLLM logged the reload time at each iteration:
 
 ```text
 [Iter 1]  Reloading and processing weights took 0.46 seconds
