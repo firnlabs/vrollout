@@ -54,9 +54,25 @@ class RolloutPipeline:
         Streams chunks of generated rollouts into an `AsyncQueue` consumed by a
         background scoring worker, returning reward-annotated trajectories. Empty
         `prompts` returns an empty list.
+
+        If a chunk or the verifier raises, or the caller cancels this coroutine, the
+        chunks still in flight are cancelled and the scorer is stopped before the error
+        propagates, so no generation keeps holding engine capacity.
         """
+        # awaiting in submission order keeps each prompt's group_size completions
+        # contiguous and the batch order deterministic, while all chunks generate
+        # concurrently
+        chunk_refs = self._manager.submit(
+            prompts, sampling_params, self._config.chunk_size
+        )
+
         queue = async_queue.AsyncQueue(self._config.queue_maxsize)
         stop_event = asyncio.Event()
+
+        async def produce() -> None:
+            for ref in chunk_refs:
+                await queue.put_items(await ref)
+            await queue.join()
 
         scorer_task = asyncio.create_task(
             scorer.score_rollouts(
@@ -66,36 +82,30 @@ class RolloutPipeline:
                 batch_size=self._config.scoring_batch_size,
             )
         )
-
-        # awaiting in submission order keeps each prompt's group_size completions
-        # contiguous and the batch order deterministic, while all chunks generate
-        # concurrently
-        chunk_refs = self._manager.submit(
-            prompts, sampling_params, self._config.chunk_size
-        )
-
-        async def produce() -> None:
-            for ref in chunk_refs:
-                await queue.put_items(await ref)
-            await queue.join()
-
         producer_task = asyncio.create_task(produce())
-        # if the scorer fails, nothing drains the queue and the producer would block
-        # forever in put_items or join, so race the two and surface the scorer error
-        await asyncio.wait(
-            {producer_task, scorer_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-        if scorer_task.done() and not producer_task.done():
+        try:
+            # if the scorer fails, nothing drains the queue and the producer would
+            # block forever in put_items or join
+            await asyncio.wait(
+                {producer_task, scorer_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if scorer_task.done() and not producer_task.done():
+                # the scorer only exits before stop_event is set by raising
+                exc = scorer_task.exception()
+                assert exc is not None
+                raise exc
+            await producer_task
+        except BaseException:
+            # awaiting a Ray ObjectRef doesn't cancel the remote task, so cancel the
+            # chunks explicitly; vLLM aborts a request whose generator is cancelled
+            self._manager.cancel(chunk_refs)
+            stop_event.set()
             producer_task.cancel()
-            await asyncio.gather(producer_task, return_exceptions=True)
-            # the scorer only exits before stop_event is set by raising
-            exc = scorer_task.exception()
-            assert exc is not None
-            raise exc
+            scorer_task.cancel()
+            await asyncio.gather(producer_task, scorer_task, return_exceptions=True)
+            raise
 
-        await producer_task
         stop_event.set()
-
         return await scorer_task
 
     @beartype
