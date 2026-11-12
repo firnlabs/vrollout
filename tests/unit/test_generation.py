@@ -7,6 +7,7 @@ from typing import Sequence
 import pytest
 import ray
 from ray.actor import ActorProxy
+import ray.exceptions
 import torch
 from torch import Tensor
 
@@ -242,6 +243,35 @@ class TestRolloutManager:
         chunks = [await ref for ref in refs]
 
         assert [len(c) for c in chunks] == [3, 3, 1]
+        assert [r.prompt for c in chunks for r in c] == prompts
+
+    @pytest.mark.asyncio
+    async def test_cancel_stops_in_flight_chunks(
+        self,
+        manager: generation.RolloutManager,
+        sampling_params: types.SamplingParams,
+    ):
+        prompts = [f"Prompt {i}" for i in range(400)]
+        refs = manager.submit(prompts, sampling_params, chunk_size=100)
+
+        manager.cancel(refs)
+        results = await asyncio.gather(*refs, return_exceptions=True)
+
+        assert all(isinstance(r, ray.exceptions.TaskCancelledError) for r in results)
+
+    @pytest.mark.asyncio
+    async def test_cancel_leaves_finished_chunks(
+        self,
+        manager: generation.RolloutManager,
+        sampling_params: types.SamplingParams,
+    ):
+        prompts = [f"Prompt {i}" for i in range(4)]
+        refs = manager.submit(prompts, sampling_params, chunk_size=2)
+        await asyncio.gather(*refs)
+
+        manager.cancel(refs)
+        chunks = [await ref for ref in refs]
+
         assert [r.prompt for c in chunks for r in c] == prompts
 
     @pytest.mark.asyncio

@@ -227,6 +227,20 @@ class RolloutManager:
             for chunk in itertools.batched(prompts, chunk_size)
         ]
 
+    def cancel(self, refs: Sequence[ray.ObjectRef[list[RolloutTrajectory]]]) -> None:
+        """Cancels chunks returned by `submit`.
+
+        Cancelling a chunk raises `CancelledError` inside the worker's async
+        `generate_batch`, which aborts its engine requests.
+
+        Finished chunks are left as they are.
+
+        Args:
+            refs: Chunk references returned by `submit`.
+        """
+        for ref in refs:
+            ray.cancel(ref)
+
     async def generate(
         self,
         prompts: Sequence[str],
