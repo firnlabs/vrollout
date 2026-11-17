@@ -518,9 +518,13 @@ def main(
         ),
     ),
     checkpoint_every: int = typer.Option(
-        0,
+        25,
         min=0,
-        help="Save a checkpoint every N iterations (0 saves only after the last one)",
+        help=(
+            "With --checkpoint-dir, save a checkpoint every N iterations and after "
+            "the last one (0 saves only after the last one). The default bounds "
+            "what a crash loses, since runs can't resume mid-way"
+        ),
     ),
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
