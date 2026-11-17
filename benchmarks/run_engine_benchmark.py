@@ -287,6 +287,7 @@ def _run_profiling(
 
     for _ in range(cfg.warmup_steps):
         dist_engine.train_iteration(warmup_rollouts, device=ctx.device)
+        dist_engine.sync_weights()
 
     activities = [torch.profiler.ProfilerActivity.CPU]
     if torch.cuda.is_available():
@@ -302,6 +303,7 @@ def _run_profiling(
         for _ in range(cfg.profiled_steps):
             t0 = time.perf_counter()
             dist_engine.train_iteration(eval_rollouts, device=ctx.device)
+            dist_engine.sync_weights()
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             step_times.append(time.perf_counter() - t0)

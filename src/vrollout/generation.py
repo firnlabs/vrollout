@@ -28,6 +28,7 @@ from vrollout.types import SamplingParams
 def _parse_vllm_output_to_rollouts(
     request_output: RequestOutput,
     worker_id: int,
+    weights_version: int = 0,
 ) -> list[RolloutTrajectory]:
     """Extracts RL training tensors and metadata for all completions in an output."""
     if not request_output.outputs:
@@ -64,6 +65,7 @@ def _parse_vllm_output_to_rollouts(
                 finish_reason=c.finish_reason or "stop",
                 text=c.text,
                 worker_id=worker_id,
+                weights_version=weights_version,
             )
         )
 
@@ -120,13 +122,18 @@ class RolloutWorker:
             _create_llm_engine(self._config) if llm_engine is None else llm_engine
         )
         self._weights_version = 0
+        self._batches_in_flight = 0
         # use monotonically increasing integers as IDs for requests
         # vLLM rejects duplicate in-flight request IDs, and batches on one worker
         # can run concurrently
         self._request_ids = itertools.count()
 
     async def _generate_single(
-        self, prompt: str, sampling_params: SamplingParams, request_id: str
+        self,
+        prompt: str,
+        sampling_params: SamplingParams,
+        request_id: str,
+        weights_version: int,
     ) -> list[RolloutTrajectory]:
         assert self._llm_engine is not None
         generator = self._llm_engine.generate(prompt, sampling_params, request_id)
@@ -137,25 +144,50 @@ class RolloutWorker:
         if final_output is None:
             raise RuntimeError(f"Engine produced no output for request {request_id}")
 
-        return _parse_vllm_output_to_rollouts(final_output, self._worker_id)
+        return _parse_vllm_output_to_rollouts(
+            final_output, self._worker_id, weights_version
+        )
 
     async def generate_batch(
         self, prompts: Sequence[str], sampling_params: SamplingParams
     ) -> list[RolloutTrajectory]:
-        """Generates rollout trajectories asynchronously for a batch of prompts."""
+        """Generates rollout trajectories asynchronously for a batch of prompts.
+
+        Each trajectory records the worker's weights version when the batch started.
+        """
         tasks = [
             self._generate_single(
-                p, sampling_params, f"request_{next(self._request_ids)}"
+                p,
+                sampling_params,
+                f"request_{next(self._request_ids)}",
+                self._weights_version,
             )
             for p in prompts
         ]
-        results = await asyncio.gather(*tasks)
+        self._batches_in_flight += 1
+        try:
+            results = await asyncio.gather(*tasks)
+        finally:
+            self._batches_in_flight -= 1
         return [traj for group in results for traj in group]
 
     async def update_weights(
         self, weights: Mapping[str, Shaped[Tensor, "..."]]
     ) -> None:
-        """Updates engine weights asynchronously, bumping weights version."""
+        """Updates engine weights asynchronously, bumping weights version.
+
+        Args:
+            weights: Full actor state dict to load into the engine.
+
+        Raises:
+            RuntimeError: If a batch is still generating; reloading mid-generation
+                would mix two weight versions in its trajectories.
+        """
+        if self._batches_in_flight:
+            raise RuntimeError(
+                f"Cannot update weights while {self._batches_in_flight} batch(es) "
+                "are generating"
+            )
         await self._llm_engine.update_weights(weights)
         self._weights_version += 1
 

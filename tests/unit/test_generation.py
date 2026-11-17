@@ -68,6 +68,25 @@ def weights() -> dict[str, Tensor]:
     return {f"weight_{i}": torch.rand(2, 3) for i in range(2)}
 
 
+class _BlockingEngine:
+    """Fake engine whose generation blocks until cancelled."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.updates = 0
+
+    async def generate(
+        self, prompt: str, sampling_params: types.SamplingParams, request_id: str
+    ) -> AsyncGenerator[types.RequestOutput, None]:
+        self.started.set()
+        await asyncio.Event().wait()
+        if False:
+            yield  # pragma: no cover
+
+    async def update_weights(self, weights: dict[str, Tensor]) -> None:
+        self.updates += 1
+
+
 class TestRolloutWorker:
     @pytest.mark.asyncio
     async def test_generate_batch(
@@ -139,7 +158,7 @@ class TestRolloutWorker:
             llm_engine=EmptyEngine(),
         )
         with pytest.raises(RuntimeError, match="Engine produced no output"):
-            await worker._generate_single("prompt", sampling_params, "req_1")
+            await worker._generate_single("prompt", sampling_params, "req_1", 0)
 
     @pytest.mark.asyncio
     async def test_update_weights(
@@ -201,6 +220,41 @@ class TestRolloutWorker:
         from vrollout.vllm_engine import AsyncVLLMEngine
 
         assert isinstance(worker._llm_engine, AsyncVLLMEngine)
+
+    @pytest.mark.asyncio
+    async def test_trajectories_record_weights_version_at_batch_start(
+        self,
+        worker: generation.RolloutWorker,
+        sampling_params: types.SamplingParams,
+        weights: dict[str, Tensor],
+    ):
+        before = await worker.generate_batch(["Prompt 1"], sampling_params)
+        await worker.update_weights(weights)
+
+        after = await worker.generate_batch(["Prompt 1", "Prompt 2"], sampling_params)
+
+        assert [r.weights_version for r in before] == [0]
+        assert [r.weights_version for r in after] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_update_weights_rejected_while_batch_generates(
+        self,
+        worker_id: int,
+        rollout_config: types.RolloutConfig,
+        sampling_params: types.SamplingParams,
+        weights: dict[str, Tensor],
+    ):
+        engine = _BlockingEngine()
+        worker = generation.RolloutWorker(worker_id, rollout_config, engine)
+        batch = asyncio.create_task(worker.generate_batch(["p"], sampling_params))
+        await engine.started.wait()
+
+        with pytest.raises(RuntimeError, match="while 1 batch"):
+            await worker.update_weights(weights)
+
+        assert engine.updates == 0
+        batch.cancel()
+        await asyncio.gather(batch, return_exceptions=True)
 
 
 @pytest.fixture

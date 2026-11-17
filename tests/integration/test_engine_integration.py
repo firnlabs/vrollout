@@ -109,6 +109,7 @@ async def _test_train_iteration_worker(
     losses = []
     for _ in range(num_iterations):
         metrics = dist_engine.train_iteration(global_rollouts)
+        dist_engine.sync_weights()
         assert metrics.rank == rank
         losses.append(metrics.avg_loss)
 
