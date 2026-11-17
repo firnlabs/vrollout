@@ -1,6 +1,7 @@
 """Unit tests for rollout diagnostic metrics."""
 
 from collections.abc import Callable
+import dataclasses
 
 import pytest
 import torch
@@ -242,3 +243,51 @@ def test_eval_length_metrics_empty() -> None:
     result = metrics.eval_length_metrics(rows)
 
     assert result == {}
+
+
+def _at_versions(versions: list[int]) -> list[scorer.ScoredRollout]:
+    base = _create_scored_rollout(1.0, [-1.0])
+    return [
+        dataclasses.replace(
+            base,
+            trajectory=dataclasses.replace(base.trajectory, weights_version=v),
+        )
+        for v in versions
+    ]
+
+
+@pytest.mark.parametrize(
+    ("versions", "policy_version", "expected"),
+    [
+        pytest.param(
+            [3, 3],
+            3,
+            {"staleness_mean": 0.0, "staleness_max": 0.0, "staleness_frac_0": 1.0},
+            id="sync",
+        ),
+        pytest.param(
+            [2, 2, 2, 3],
+            3,
+            {
+                "staleness_mean": 0.75,
+                "staleness_max": 1.0,
+                "staleness_frac_0": 0.25,
+                "staleness_frac_1": 0.75,
+            },
+            id="mixed",
+        ),
+    ],
+)
+def test_staleness_metrics(
+    versions: list[int], policy_version: int, expected: dict[str, float]
+) -> None:
+    rollouts = _at_versions(versions)
+
+    result = metrics.staleness_metrics(rollouts, policy_version)
+
+    assert result == pytest.approx(expected)
+
+
+def test_staleness_metrics_rejects_empty_batch() -> None:
+    with pytest.raises(ValueError, match="cannot be empty"):
+        metrics.staleness_metrics([], 0)

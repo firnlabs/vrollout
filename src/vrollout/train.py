@@ -5,6 +5,8 @@ os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
 
 import asyncio
+from concurrent import futures
+import contextlib
 from dataclasses import dataclass
 import datetime
 import json
@@ -31,6 +33,7 @@ from vrollout import generation
 from vrollout import metrics
 from vrollout import pipeline
 from vrollout import placement
+from vrollout import rollout_runner
 from vrollout import scorer
 from vrollout import sharding
 from vrollout import trainer
@@ -526,6 +529,14 @@ def main(
             "what a crash loses, since runs can't resume mid-way"
         ),
     ),
+    async_rollouts: bool = typer.Option(
+        False,
+        "--async-rollouts/--sync-rollouts",
+        help=(
+            "Generate the next batch while the current one trains, so each batch is "
+            "trained one weight version stale"
+        ),
+    ),
 ) -> None:
     """Executes distributed GRPO training iterations with Ray rollout generation."""
     console = rich_console.Console()
@@ -644,6 +655,7 @@ def main(
                     "gpu_memory_utilization": gpu_memory_utilization,
                     "enforce_eager": enforce_eager,
                     "seed": seed,
+                    "async_rollouts": async_rollouts,
                     "checkpoint_dir": checkpoint_dir,
                     "eval_output_dir": eval_output_dir,
                     "fsdp": shard_models,
@@ -756,6 +768,7 @@ def main(
         logit_chunk_size=logit_chunk_size,
         max_grad_norm=max_grad_norm,
         temperature=temperature,
+        max_staleness=1 if async_rollouts else 0,
         autocast_dtype=(
             torch.bfloat16
             if (device.type == "cuda" and torch.cuda.is_bf16_supported())
@@ -790,6 +803,9 @@ def main(
         "Eval (s)",
         title="GRPO training progress",
     )
+
+    def _iter_prompts(it: int) -> list[str]:
+        return all_prompts[it * num_prompts : (it + 1) * num_prompts]
 
     baseline_eval_rollouts: list[scorer.ScoredRollout] = []
     final_eval_rollouts: list[scorer.ScoredRollout] = []
@@ -839,152 +855,193 @@ def main(
                 step=0,
             )
 
-    for it in range(num_iterations):
-        t0 = time.perf_counter()
-
-        # rollout & score on rank 0
-        container: list[Any] = [None]
-        rollout_time_s = 0.0
+    # rank 0 generates on a background event loop, so with --async-rollouts the
+    # next batch generates while the current one trains
+    with contextlib.ExitStack() as stack:
+        runner: rollout_runner.RolloutRunner | None = None
+        pending: futures.Future[rollout_runner.TimedRolloutBatch] | None = None
         if rank == 0:
             assert rollout_pipeline is not None
-            iter_prompts = all_prompts[it * num_prompts : (it + 1) * num_prompts]
-            scored = asyncio.run(
-                rollout_pipeline.generate_and_score(iter_prompts, sampling_params)
-            )
-            container[0] = scored
-            rollout_time_s = time.perf_counter() - t0
+            runner = stack.enter_context(rollout_runner.RolloutRunner(rollout_pipeline))
 
-        # broadcast scored rollouts to all ranks
-        t_bcast = time.perf_counter()
-        dist.broadcast_object_list(container, src=0, device=device)
-        scored_rollouts = container[0]
-        broadcast_time_s = time.perf_counter() - t_bcast
+        for it in range(num_iterations):
+            t0 = time.perf_counter()
 
-        # train step on rank local batch & broadcast weights from rank 0
-        train_metrics = dist_engine.train_iteration(scored_rollouts, device=device)
+            # rollout & score on rank 0
+            container: list[Any] = [None]
+            rollout_time_s = 0.0
+            rollout_wait_s = 0.0
+            if rank == 0:
+                assert runner is not None
+                if pending is None:
+                    pending = runner.submit(_iter_prompts(it), sampling_params)
+                t_wait = time.perf_counter()
+                rollout_batch = pending.result()
+                rollout_wait_s += time.perf_counter() - t_wait
+                rollout_time_s = rollout_batch.generation_time_s
+                container[0] = rollout_batch.scored_rollouts
+                pending = None
+                if async_rollouts and it + 1 < num_iterations:
+                    # generates with the current weights while this batch trains,
+                    # so it is one version stale when trained on next iteration
+                    pending = runner.submit(_iter_prompts(it + 1), sampling_params)
 
-        # eval is excluded from the step time so steps are comparable across runs
-        step_time_s = time.perf_counter() - t0
+            # broadcast scored rollouts to all ranks
+            t_bcast = time.perf_counter()
+            dist.broadcast_object_list(container, src=0, device=device)
+            scored_rollouts = container[0]
+            broadcast_time_s = time.perf_counter() - t_bcast
 
-        # periodic evaluation on held-out prompts (rank 0)
-        eval_reward: float | None = None
-        eval_format_rate: float | None = None
-        eval_acc: dict[str, float] | None = None
-        eval_time_s: float | None = None
-        eval_rows: list[metrics.EvalRow] | None = None
-        if (
-            rank == 0
-            and eval_prompts
-            and _should_evaluate(it + 1, eval_every, num_iterations)
-        ):
-            assert rollout_pipeline is not None
-            t_eval = time.perf_counter()
-            eval_reward, final_eval_rollouts = _run_evaluation(
-                rollout_pipeline, eval_prompts, eval_completion_len
-            )
-            eval_format_rate = verifiers.compute_format_compliance_rate(
-                final_eval_rollouts, target_format=format_target
-            )
-            eval_acc = _eval_accuracies(final_eval_rollouts, prompt_to_ans)
-            eval_time_s = time.perf_counter() - t_eval
-            eval_rows = metrics.eval_rows(final_eval_rollouts, prompt_to_ans)
-            _save_eval_rows(eval_rows, eval_output_dir, step=it + 1)
-
-        # every rank must enter: gathering FSDP2 shards is a collective
-        if checkpoint_dir is not None and checkpoint.should_checkpoint(
-            it + 1, checkpoint_every, num_iterations
-        ):
-            saved = _save_checkpoint(
-                actor,
-                pathlib.Path(checkpoint_dir) / f"step-{it + 1}",
-                rank,
-                model_name,
-                backend,
-            )
-            if saved is not None:
-                console.print(f"[dim]Saved checkpoint:[/dim] {saved}")
-
-        # metric reporting on rank 0
-        if rank == 0:
-            rewards = [sr.reward for sr in scored_rollouts]
-            mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
-            train_format_rate = verifiers.compute_format_compliance_rate(
-                scored_rollouts, target_format=format_target
-            )
-            eval_reward_str = f"{eval_reward:.3f}" if eval_reward is not None else "-"
-            format_rate_str = f"{train_format_rate:.1%}"
-            if eval_format_rate is not None:
-                format_rate_str = f"{train_format_rate:.1%} / {eval_format_rate:.1%}"
-            advantages = buffer.compute_global_advantages(scored_rollouts, group_size)
-            rollout_stats = metrics.compute_rollout_metrics(
-                scored_rollouts, advantages, group_size
-            )
-            zero_adv = rollout_stats.zero_advantage_group_frac
-
-            table.add_row(
-                str(it + 1),
-                f"{train_metrics.avg_loss:.4f}",
-                f"{train_metrics.avg_kl:.4f}",
-                f"{train_metrics.avg_clip_fraction:.2%}",
-                f"{mean_reward:.3f}",
-                format_rate_str,
-                f"{rollout_stats.response_length_mean:.0f}",
-                f"{zero_adv:.0%}" if zero_adv is not None else "-",
-                eval_reward_str,
-                _format_accuracies(eval_acc) if eval_acc is not None else "-",
-                f"{step_time_s:.2f}s",
-                f"{eval_time_s:.2f}s" if eval_time_s is not None else "-",
+            staleness = (
+                metrics.staleness_metrics(scored_rollouts, dist_engine.policy_version)
+                if rank == 0
+                else {}
             )
 
-            if wandb_run:
-                completion_tokens = sum(
-                    len(sr.trajectory.completion_token_ids) for sr in scored_rollouts
+            # train step on rank local batch & broadcast weights from rank 0
+            train_metrics = dist_engine.train_iteration(scored_rollouts, device=device)
+            if pending is not None:
+                # vLLM must not reload weights while the next batch is generating
+                t_wait = time.perf_counter()
+                futures.wait([pending])
+                rollout_wait_s += time.perf_counter() - t_wait
+            t_sync = time.perf_counter()
+            dist_engine.sync_weights()
+            weight_sync_time_s = time.perf_counter() - t_sync
+
+            # eval is excluded from the step time so steps are comparable across runs
+            step_time_s = time.perf_counter() - t0
+
+            # periodic evaluation on held-out prompts (rank 0)
+            eval_reward: float | None = None
+            eval_format_rate: float | None = None
+            eval_acc: dict[str, float] | None = None
+            eval_time_s: float | None = None
+            eval_rows: list[metrics.EvalRow] | None = None
+            if (
+                rank == 0
+                and eval_prompts
+                and _should_evaluate(it + 1, eval_every, num_iterations)
+            ):
+                assert rollout_pipeline is not None
+                t_eval = time.perf_counter()
+                eval_reward, final_eval_rollouts = _run_evaluation(
+                    rollout_pipeline, eval_prompts, eval_completion_len
                 )
-                log_payload: dict[str, Any] = {
-                    "loss": train_metrics.avg_loss,
-                    "kl": train_metrics.avg_kl,
-                    "clip_fraction": train_metrics.avg_clip_fraction,
-                    "grad_norm": train_metrics.avg_grad_norm,
-                    "lr": train_metrics.lr,
-                    "logprob_abs_diff": train_metrics.avg_logprob_abs_diff,
-                    "mismatch_kl": train_metrics.avg_mismatch_kl,
-                    "reward_mean": mean_reward,
-                    "format_compliance_rate": train_format_rate,
-                    "step_time_s": step_time_s,
-                    "rollout_time_s": rollout_time_s,
-                    "broadcast_time_s": broadcast_time_s,
-                    "train_time_s": train_metrics.train_time_s,
-                    "weight_sync_time_s": train_metrics.weight_sync_time_s,
-                    "rollout_tokens_per_s": (
-                        completion_tokens / rollout_time_s if rollout_time_s else 0.0
-                    ),
-                    **rollout_stats.to_dict(),
-                }
-                if eval_reward is not None:
-                    log_payload["eval_reward_mean"] = eval_reward
+                eval_format_rate = verifiers.compute_format_compliance_rate(
+                    final_eval_rollouts, target_format=format_target
+                )
+                eval_acc = _eval_accuracies(final_eval_rollouts, prompt_to_ans)
+                eval_time_s = time.perf_counter() - t_eval
+                eval_rows = metrics.eval_rows(final_eval_rollouts, prompt_to_ans)
+                _save_eval_rows(eval_rows, eval_output_dir, step=it + 1)
+
+            # every rank must enter: gathering FSDP2 shards is a collective
+            if checkpoint_dir is not None and checkpoint.should_checkpoint(
+                it + 1, checkpoint_every, num_iterations
+            ):
+                saved = _save_checkpoint(
+                    actor,
+                    pathlib.Path(checkpoint_dir) / f"step-{it + 1}",
+                    rank,
+                    model_name,
+                    backend,
+                )
+                if saved is not None:
+                    console.print(f"[dim]Saved checkpoint:[/dim] {saved}")
+
+            # metric reporting on rank 0
+            if rank == 0:
+                rewards = [sr.reward for sr in scored_rollouts]
+                mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
+                train_format_rate = verifiers.compute_format_compliance_rate(
+                    scored_rollouts, target_format=format_target
+                )
+                eval_reward_str = (
+                    f"{eval_reward:.3f}" if eval_reward is not None else "-"
+                )
+                format_rate_str = f"{train_format_rate:.1%}"
                 if eval_format_rate is not None:
-                    log_payload["eval_format_compliance_rate"] = eval_format_rate
-                if eval_acc is not None:
-                    log_payload.update(eval_acc)
-                if eval_time_s is not None:
-                    log_payload["eval_time_s"] = eval_time_s
-                if eval_rows is not None:
-                    log_payload.update(metrics.eval_length_metrics(eval_rows))
-                    log_payload["eval_samples"] = wandb_table(
-                        columns=list(metrics.EVAL_COLUMNS),
-                        data=[row.to_list() for row in eval_rows],
+                    format_rate_str = (
+                        f"{train_format_rate:.1%} / {eval_format_rate:.1%}"
                     )
-                if log_sequences_every > 0 and (it + 1) % log_sequences_every == 0:
-                    log_payload["sequences"] = wandb_table(
-                        columns=list(metrics.SEQUENCE_COLUMNS),
-                        data=[
-                            row.to_list()
-                            for row in metrics.sequence_rows(
-                                scored_rollouts, advantages, group_size
-                            )
-                        ],
+                advantages = buffer.compute_global_advantages(
+                    scored_rollouts, group_size
+                )
+                rollout_stats = metrics.compute_rollout_metrics(
+                    scored_rollouts, advantages, group_size
+                )
+                zero_adv = rollout_stats.zero_advantage_group_frac
+
+                table.add_row(
+                    str(it + 1),
+                    f"{train_metrics.avg_loss:.4f}",
+                    f"{train_metrics.avg_kl:.4f}",
+                    f"{train_metrics.avg_clip_fraction:.2%}",
+                    f"{mean_reward:.3f}",
+                    format_rate_str,
+                    f"{rollout_stats.response_length_mean:.0f}",
+                    f"{zero_adv:.0%}" if zero_adv is not None else "-",
+                    eval_reward_str,
+                    _format_accuracies(eval_acc) if eval_acc is not None else "-",
+                    f"{step_time_s:.2f}s",
+                    f"{eval_time_s:.2f}s" if eval_time_s is not None else "-",
+                )
+
+                if wandb_run:
+                    completion_tokens = sum(
+                        len(sr.trajectory.completion_token_ids)
+                        for sr in scored_rollouts
                     )
-                wandb_run.log(log_payload, step=it + 1)
+                    log_payload: dict[str, Any] = {
+                        "loss": train_metrics.avg_loss,
+                        "kl": train_metrics.avg_kl,
+                        "clip_fraction": train_metrics.avg_clip_fraction,
+                        "grad_norm": train_metrics.avg_grad_norm,
+                        "lr": train_metrics.lr,
+                        "logprob_abs_diff": train_metrics.avg_logprob_abs_diff,
+                        "mismatch_kl": train_metrics.avg_mismatch_kl,
+                        "reward_mean": mean_reward,
+                        "format_compliance_rate": train_format_rate,
+                        "step_time_s": step_time_s,
+                        "rollout_time_s": rollout_time_s,
+                        "rollout_wait_s": rollout_wait_s,
+                        "broadcast_time_s": broadcast_time_s,
+                        "train_time_s": train_metrics.train_time_s,
+                        "weight_sync_time_s": weight_sync_time_s,
+                        "rollout_tokens_per_s": (
+                            completion_tokens / rollout_time_s
+                            if rollout_time_s
+                            else 0.0
+                        ),
+                        **rollout_stats.to_dict(),
+                        **staleness,
+                    }
+                    if eval_reward is not None:
+                        log_payload["eval_reward_mean"] = eval_reward
+                    if eval_format_rate is not None:
+                        log_payload["eval_format_compliance_rate"] = eval_format_rate
+                    if eval_acc is not None:
+                        log_payload.update(eval_acc)
+                    if eval_time_s is not None:
+                        log_payload["eval_time_s"] = eval_time_s
+                    if eval_rows is not None:
+                        log_payload.update(metrics.eval_length_metrics(eval_rows))
+                        log_payload["eval_samples"] = wandb_table(
+                            columns=list(metrics.EVAL_COLUMNS),
+                            data=[row.to_list() for row in eval_rows],
+                        )
+                    if log_sequences_every > 0 and (it + 1) % log_sequences_every == 0:
+                        log_payload["sequences"] = wandb_table(
+                            columns=list(metrics.SEQUENCE_COLUMNS),
+                            data=[
+                                row.to_list()
+                                for row in metrics.sequence_rows(
+                                    scored_rollouts, advantages, group_size
+                                )
+                            ],
+                        )
+                    wandb_run.log(log_payload, step=it + 1)
 
     if rank == 0:
         console.print(table)

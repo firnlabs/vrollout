@@ -269,3 +269,38 @@ def eval_length_metrics(rows: Sequence[EvalRow]) -> dict[str, float]:
         "eval_truncation_rate": sum(r.finish_reason == "length" for r in rows)
         / len(rows),
     }
+
+
+def staleness_metrics(
+    scored_rollouts: Sequence[ScoredRollout], policy_version: int
+) -> dict[str, float]:
+    """Summarizes rollout weight version lag against the actor.
+
+    A rollout generated with weights version `v` and trained at policy version `k`
+    is `k - v` versions stale. Synchronous training gives 0 everywhere; overlapped
+    rollouts give 1 after the first step.
+
+    Args:
+        scored_rollouts: Rollouts about to be trained on.
+        policy_version: Number of weight syncs the actor has done so far.
+
+    Returns:
+        `staleness_mean`, `staleness_max` and `staleness_frac_<s>`, the fraction of
+        rollouts that are `s` versions stale, for each staleness value present.
+
+    Raises:
+        ValueError: If `scored_rollouts` is empty.
+    """
+    if not scored_rollouts:
+        raise ValueError("`scored_rollouts` cannot be empty.")
+    staleness = [
+        policy_version - sr.trajectory.weights_version for sr in scored_rollouts
+    ]
+    n = len(staleness)
+    result = {
+        "staleness_mean": sum(staleness) / n,
+        "staleness_max": float(max(staleness)),
+    }
+    for s in sorted(set(staleness)):
+        result[f"staleness_frac_{s}"] = staleness.count(s) / n
+    return result

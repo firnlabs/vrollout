@@ -136,7 +136,12 @@ class RolloutConfig:
 
 @dataclass(frozen=True, slots=True)
 class RolloutTrajectory:
-    """Individual generated rollout trajectory and metadata."""
+    """Individual generated rollout trajectory and metadata.
+
+    `weights_version` counts the weight updates the generating worker had received,
+    so a trainer that has done `k` updates sees this rollout as `k - weights_version`
+    versions stale.
+    """
 
     request_id: str
     prompt: str
@@ -146,3 +151,4 @@ class RolloutTrajectory:
     finish_reason: str
     text: str
     worker_id: int
+    weights_version: int = 0

@@ -39,6 +39,10 @@ class RLEngineConfig:
             the model's native precision.
         temperature: Sampling temperature of the training rollouts; the trainer
             divides logits by this value so its log-probs match the sampler's.
+        max_staleness: Most weight versions a rollout may lag the actor by when it
+            is trained on: 0 for synchronous rollouts, 1 when the next batch is
+            generated while the current one trains. None skips the check, for
+            callers that reuse fixed rollouts such as benchmarks.
     """
 
     pad_token_id: int = 0
@@ -51,6 +55,7 @@ class RLEngineConfig:
     max_grad_norm: float | None = 1.0
     autocast_dtype: torch.dtype | None = None
     temperature: float = 1.0
+    max_staleness: int | None = None
 
 
 @dataclass(frozen=True)
@@ -73,8 +78,6 @@ class TrainIterationMetrics:
         avg_grad_norm: Global L2 gradient norm before clipping.
         train_time_s: Wall-clock seconds spent across all train steps in the
             iteration.
-        weight_sync_time_s: Wall-clock seconds spent extracting and broadcasting
-            actor weights to the rollout receivers.
         lr: Learning rate used by the iteration's last train step.
     """
 
@@ -86,7 +89,6 @@ class TrainIterationMetrics:
     avg_mismatch_kl: float = 0.0
     avg_grad_norm: float = 0.0
     train_time_s: float = 0.0
-    weight_sync_time_s: float = 0.0
     lr: float = 0.0
 
 
@@ -141,13 +143,57 @@ class DistributedRLEngine:
         self._broadcaster = sync.WeightBroadcaster(
             rank=self._rank, receivers=self._receivers
         )
+        self._policy_version = 0
+
+    @property
+    def policy_version(self) -> int:
+        """Number of weight syncs so far, matching the rollout workers' version."""
+        return self._policy_version
+
+    def sync_weights(self) -> None:
+        """Broadcasts the actor's weights to the receivers and bumps the version.
+
+        Must be called on every rank: gathering FSDP2 shards is a collective.
+        """
+        self._broadcaster.extract_and_broadcast(self._actor)
+        self._policy_version += 1
+
+    def _check_staleness(self, scored_rollouts: list[ScoredRollout]) -> None:
+        if self._config.max_staleness is None:
+            return
+        versions = {sr.trajectory.weights_version for sr in scored_rollouts}
+        staleness = {self._policy_version - v for v in versions}
+        if min(staleness) < 0 or max(staleness) > self._config.max_staleness:
+            raise ValueError(
+                f"Rollouts from weights versions {sorted(versions)} are outside the "
+                f"allowed staleness [0, {self._config.max_staleness}] at policy "
+                f"version {self._policy_version}"
+            )
 
     def train_iteration(
-        self, scored_rollouts: list[ScoredRollout], device: torch.device | str = "cpu"
+        self,
+        scored_rollouts: list[ScoredRollout],
+        device: torch.device | str = "cpu",
     ) -> TrainIterationMetrics:
-        """Runs training iteration over scored rollouts and broadcasts actor weights."""
+        """Runs a training iteration over scored rollouts.
+
+        Does not publish the updated weights; call `sync_weights` afterwards, once
+        no rollout is generating with the current weights.
+
+        Args:
+            scored_rollouts: Reward-scored rollouts for this iteration.
+            device: Device to place the rank-local batch on.
+
+        Returns:
+            The iteration's training metrics.
+
+        Raises:
+            ValueError: If `scored_rollouts` is empty or any rollout is staler than
+                `max_staleness` versions.
+        """
         if not scored_rollouts:
             raise ValueError("`scored_rollouts` cannot be empty.")
+        self._check_staleness(scored_rollouts)
 
         dist_buffer = buffer.DistributedRolloutBuffer(
             scored_rollouts,
@@ -165,10 +211,6 @@ class DistributedRLEngine:
             metrics_list.append(metrics)
         train_time_s = time.perf_counter() - t_train
 
-        t_sync = time.perf_counter()
-        self._broadcaster.extract_and_broadcast(self._actor)
-        weight_sync_time_s = time.perf_counter() - t_sync
-
         return TrainIterationMetrics(
             avg_loss=_mean([m.loss for m in metrics_list]),
             rank=self._rank,
@@ -178,6 +220,5 @@ class DistributedRLEngine:
             avg_mismatch_kl=_mean([m.mismatch_kl for m in metrics_list]),
             avg_grad_norm=_mean([m.grad_norm for m in metrics_list]),
             train_time_s=train_time_s,
-            weight_sync_time_s=weight_sync_time_s,
             lr=metrics_list[-1].lr,
         )
