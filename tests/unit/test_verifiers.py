@@ -1,5 +1,7 @@
 """Unit tests for reward verifiers and format compliance metrics."""
 
+from concurrent import futures
+
 import pytest
 
 from vrollout import scorer
@@ -191,6 +193,13 @@ def test_compute_format_compliance_rate_strings() -> None:
 
 def test_verify_math_answer_malformed_float_fallback() -> None:
     assert verify_math_answer("#### 1.2.3", "#### 4") == 0.0
+
+
+def test_verify_math_answer_off_main_thread() -> None:
+    with futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(verify_math_answer, "#### 4", "2 + 2 = 4\n#### 4")
+
+    assert future.result(timeout=5) == 1.0
 
 
 @pytest.mark.asyncio

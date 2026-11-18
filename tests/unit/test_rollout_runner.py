@@ -10,22 +10,24 @@ import pytest
 from vrollout import rollout_runner
 from vrollout import scorer
 from vrollout import types
+from vrollout import verifiers
+
+
+def _trajectory(prompt: str, text: str = "") -> types.RolloutTrajectory:
+    return types.RolloutTrajectory(
+        request_id=prompt,
+        prompt=prompt,
+        prompt_token_ids=[1],
+        completion_token_ids=[2],
+        logprobs=[-0.1],
+        finish_reason="stop",
+        text=text,
+        worker_id=0,
+    )
 
 
 def _scored_rollout(prompt: str) -> scorer.ScoredRollout:
-    return scorer.ScoredRollout(
-        reward=1.0,
-        trajectory=types.RolloutTrajectory(
-            request_id=prompt,
-            prompt=prompt,
-            prompt_token_ids=[1],
-            completion_token_ids=[2],
-            logprobs=[-0.1],
-            finish_reason="stop",
-            text="",
-            worker_id=0,
-        ),
-    )
+    return scorer.ScoredRollout(reward=1.0, trajectory=_trajectory(prompt))
 
 
 class _GatedPipeline:
@@ -55,6 +57,24 @@ class _FailingPipeline:
         self, prompts: Sequence[str], sampling_params: Any
     ) -> list[scorer.ScoredRollout]:
         raise KeyError(prompts[0])
+
+
+class _GSM8KScoringPipeline:
+    """Fake pipeline that answers every prompt with "#### 4" and scores it."""
+
+    def __init__(self, prompt_to_answer: dict[str, str]) -> None:
+        self._verifier = verifiers.GSM8KVerifier(prompt_to_answer)
+
+    async def generate_and_score(
+        self, prompts: Sequence[str], sampling_params: Any
+    ) -> list[scorer.ScoredRollout]:
+        _ = sampling_params  # unused
+        trajectories = [_trajectory(p, text="#### 4") for p in prompts]
+        rewards = await asyncio.gather(*(self._verifier(t) for t in trajectories))
+        return [
+            scorer.ScoredRollout(reward=r, trajectory=t)
+            for r, t in zip(rewards, trajectories, strict=True)
+        ]
 
 
 def test_submit_returns_while_batch_generates_off_main_thread() -> None:
@@ -92,3 +112,12 @@ def test_exit_cancels_in_flight_batch_and_stops_thread() -> None:
     assert fake.cancelled
     assert future.cancelled()
     assert not runner._thread.is_alive()
+
+
+def test_gsm8k_verifier_scores_on_runner_thread() -> None:
+    fake = _GSM8KScoringPipeline({"2 + 2?": "#### 4", "2 + 3?": "#### 5"})
+
+    with rollout_runner.RolloutRunner(fake) as runner:
+        batch = runner.submit(["2 + 2?", "2 + 3?"], None).result(timeout=5)
+
+    assert [sr.reward for sr in batch.scored_rollouts] == [1.0, 0.0]

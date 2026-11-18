@@ -31,6 +31,10 @@ _LENIENT_EXTRACTION = (
     math_verify.LatexExtractionConfig(boxed_match_priority=0),
     math_verify.ExprExtractionConfig(),
 )
+# math-verify's timeouts use signal.alarm, which raises off the main thread, and
+# training rollouts are scored on RolloutRunner's thread. Disabled everywhere so a
+# completion gets the same reward in training and eval
+_NO_TIMEOUT = None
 
 
 def _strip_follow_up_questions(text: str) -> str:
@@ -58,7 +62,9 @@ def parse_answer(text: str, strict: bool = False) -> list[Any]:
         return []
     text = _GSM8K_TAG.sub(_GSM8K_TAG_AS_ANCHOR, _strip_follow_up_questions(text))
     return math_verify.parse(
-        text, extraction_config=_STRICT_EXTRACTION if strict else _LENIENT_EXTRACTION
+        text,
+        extraction_config=_STRICT_EXTRACTION if strict else _LENIENT_EXTRACTION,
+        parsing_timeout=_NO_TIMEOUT,
     )
 
 
@@ -157,7 +163,7 @@ def verify_math_answer(
     pred = parse_answer(prediction, strict=strict_format)
     if not gt or not pred:
         return 0.0
-    return 1.0 if math_verify.verify(gt, pred) else 0.0
+    return 1.0 if math_verify.verify(gt, pred, timeout_seconds=_NO_TIMEOUT) else 0.0
 
 
 def compute_accuracy(
