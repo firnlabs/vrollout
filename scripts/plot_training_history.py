@@ -253,12 +253,22 @@ def plot(
         pathlib.Path, typer.Option("--output", "-o", help="Training dynamics figure")
     ],
     step_time_output: Annotated[
-        pathlib.Path, typer.Option("--step-time-output", help="Step time figure")
-    ],
+        pathlib.Path | None,
+        typer.Option(
+            "--step-time-output",
+            help=(
+                "Stacked step-time figure; sync runs only, since async overlaps "
+                "rollout with training (see plot_sync_async.py)"
+            ),
+        ),
+    ] = None,
     summary_output: Annotated[
         pathlib.Path | None,
         typer.Option("--summary-output", help="Two-panel README figure"),
     ] = None,
+    run_label: Annotated[
+        str, typer.Option("--run-label", help="Run name in the figure title")
+    ] = "E1",
 ) -> None:
     """Plots training dynamics and step time, and optionally the README summary."""
     history = _read_columns(history_csv)
@@ -313,7 +323,7 @@ def plot(
     for ax in (ax_format, ax_length):
         ax.set_xlabel("training step", fontsize=10, color=INK_MUTED)
     fig.suptitle(
-        f"E1 training, {NUM_STEPS} steps (grey: per step, blue: "
+        f"{run_label} training, {NUM_STEPS} steps (grey: per step, blue: "
         f"{SMOOTH_WINDOW}-step mean)",
         x=0.01,
         ha="left",
@@ -322,15 +332,16 @@ def plot(
     )
     _save(fig, output)
 
-    fig, ax = plt.subplots(figsize=(9, 3.5), layout="constrained")
-    fig.patch.set_facecolor(SURFACE)
-    _plot_step_time(
-        ax,
-        train["step"],
-        {label: train[column] for label, column in STEP_TIME_PHASES},
-    )
-    ax.set_xlabel("training step", fontsize=10, color=INK_MUTED)
-    _save(fig, step_time_output)
+    if step_time_output is not None:
+        fig, ax = plt.subplots(figsize=(9, 3.5), layout="constrained")
+        fig.patch.set_facecolor(SURFACE)
+        _plot_step_time(
+            ax,
+            train["step"],
+            {label: train[column] for label, column in STEP_TIME_PHASES},
+        )
+        ax.set_xlabel("training step", fontsize=10, color=INK_MUTED)
+        _save(fig, step_time_output)
 
     if summary_output is not None:
         _plot_summary(train, summary_output)
