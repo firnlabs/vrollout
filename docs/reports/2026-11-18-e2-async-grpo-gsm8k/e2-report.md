@@ -25,7 +25,7 @@ The following table shows the differences:
 
 ### Code changes
 
-Asynchronouse mode (PR #82):
+Asynchronous mode (PR #82):
 
 - While step *k* trains on GPU 0, vLLM generates the batch for step *k* + 1 on GPU 1, using the weights from before step *k*'s update.
 - After training, the trainer waits for that batch to finish, then copies its new weights to vLLM.
