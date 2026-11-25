@@ -176,6 +176,9 @@ class RolloutWorker:
     ) -> None:
         """Updates engine weights asynchronously, bumping weights version.
 
+        Also drops the engine's prefix cache, so no prompt reuses KV values that the
+        previous weights computed.
+
         Args:
             weights: Full actor state dict to load into the engine.
 
@@ -189,6 +192,8 @@ class RolloutWorker:
                 "are generating"
             )
         await self._llm_engine.update_weights(weights)
+        # a reload keeps the prefix cache, whose KV values the old weights computed
+        await self._llm_engine.reset_prefix_cache()
         self._weights_version += 1
 
     async def reset_prefix_cache(self) -> None:

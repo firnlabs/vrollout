@@ -289,6 +289,18 @@ class TestRolloutWorker:
         batch.cancel()
         await asyncio.gather(batch, return_exceptions=True)
 
+    @pytest.mark.asyncio
+    async def test_update_weights_resets_prefix_cache(
+        self,
+        worker: generation.RolloutWorker,
+        mock_llm_engine: MockAsyncLLMEngine,
+        weights: dict[str, Tensor],
+    ):
+        await worker.update_weights(weights)
+        await worker.update_weights(weights)
+
+        assert mock_llm_engine.prefix_cache_resets == 2
+
 
 @pytest.fixture
 def manager(
