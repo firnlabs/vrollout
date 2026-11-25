@@ -74,6 +74,7 @@ class _BlockingEngine:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.updates = 0
+        self.resets = 0
 
     async def generate(
         self, prompt: str, sampling_params: types.SamplingParams, request_id: str
@@ -85,6 +86,9 @@ class _BlockingEngine:
 
     async def update_weights(self, weights: dict[str, Tensor]) -> None:
         self.updates += 1
+
+    async def reset_prefix_cache(self) -> None:
+        self.resets += 1
 
 
 class TestRolloutWorker:
@@ -169,6 +173,35 @@ class TestRolloutWorker:
         await worker.update_weights(weights)
 
         assert worker._weights_version == 1
+
+    @pytest.mark.asyncio
+    async def test_reset_prefix_cache(
+        self,
+        worker: generation.RolloutWorker,
+        mock_llm_engine: MockAsyncLLMEngine,
+    ):
+        await worker.reset_prefix_cache()
+
+        assert mock_llm_engine.prefix_cache_resets == 1
+
+    @pytest.mark.asyncio
+    async def test_reset_prefix_cache_rejected_while_batch_generates(
+        self,
+        worker_id: int,
+        rollout_config: types.RolloutConfig,
+        sampling_params: types.SamplingParams,
+    ):
+        engine = _BlockingEngine()
+        worker = generation.RolloutWorker(worker_id, rollout_config, engine)
+        batch = asyncio.create_task(worker.generate_batch(["p"], sampling_params))
+        await engine.started.wait()
+
+        with pytest.raises(RuntimeError, match="while 1 batch"):
+            await worker.reset_prefix_cache()
+
+        assert engine.resets == 0
+        batch.cancel()
+        await asyncio.gather(batch, return_exceptions=True)
 
     def test_use_vllm_engine_from_config(self, mocker, mock_async_llm_engine):
         spy_init = mocker.spy(generation, "_create_llm_engine")
@@ -350,6 +383,19 @@ class TestRolloutManager:
             assert isinstance(s, generation.RolloutWorkerStatus)
             assert s.llm_engine_type == "MockAsyncLLMEngine"
             assert s.weights_version == 1
+
+    def test_reset_prefix_cache_reaches_every_worker(
+        self, mocker, manager: generation.RolloutManager, num_workers: int
+    ):
+        workers = [mocker.MagicMock() for _ in range(num_workers)]
+        for w in workers:
+            w.reset_prefix_cache.remote.return_value = ray.put(None)
+        mocker.patch.object(manager, "_workers", workers)
+
+        manager.reset_prefix_cache()
+
+        for w in workers:
+            w.reset_prefix_cache.remote.assert_called_once_with()
 
     def test_gpus_per_worker_forwards_ray_options(self, mocker):
         mock_options = mocker.patch.object(generation.ActorRolloutWorker, "options")

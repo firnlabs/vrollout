@@ -111,6 +111,7 @@ class MockAsyncLLMEngine:
         self.model_name = model_name or type(model).__name__
 
         self.tokenizer = AsciiTokenizer(self.vocab_size)
+        self.prefix_cache_resets = 0
 
     async def generate(
         self, prompt: str, sampling_params: SamplingParams, request_id: str
@@ -168,3 +169,6 @@ class MockAsyncLLMEngine:
         assert self.model is not None
         with torch.no_grad():
             self.model.load_state_dict(weights, strict=False)
+
+    async def reset_prefix_cache(self) -> None:
+        self.prefix_cache_resets += 1

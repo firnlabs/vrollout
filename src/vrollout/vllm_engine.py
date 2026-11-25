@@ -106,3 +106,16 @@ class AsyncVLLMEngine:
                     "is_checkpoint_format": True,
                 },
             )
+
+    async def reset_prefix_cache(self) -> None:
+        """Drops every cached KV block to recompute later prompts.
+
+        A weight reload leaves the prefix cache in place, so prompts sharing a cached
+        prefix would otherwise reuse KV values computed by the previous weights.
+
+        Raises:
+            RuntimeError: If vLLM refuses the reset, which it does while requests are
+                running.
+        """
+        if not await self._llm_engine.reset_prefix_cache():
+            raise RuntimeError("vLLM did not reset the prefix cache")

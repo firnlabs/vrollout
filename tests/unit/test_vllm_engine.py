@@ -109,6 +109,25 @@ class TestAsyncVLLMEngine:
 
         mock_async_llm_engine.collective_rpc.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_reset_prefix_cache(
+        self, mock_async_llm_engine: MagicMock, async_vllm_engine: AsyncVLLMEngine
+    ):
+        mock_async_llm_engine.reset_prefix_cache.return_value = True
+
+        await async_vllm_engine.reset_prefix_cache()
+
+        mock_async_llm_engine.reset_prefix_cache.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_reset_prefix_cache_refused_raises(
+        self, mock_async_llm_engine: MagicMock, async_vllm_engine: AsyncVLLMEngine
+    ):
+        mock_async_llm_engine.reset_prefix_cache.return_value = False
+
+        with pytest.raises(RuntimeError, match="did not reset the prefix cache"):
+            await async_vllm_engine.reset_prefix_cache()
+
     def test_init_forwards_engine_args(self, mocker):
         mock_args = mocker.patch("vllm.AsyncEngineArgs")
         mocker.patch("vllm.AsyncLLMEngine.from_engine_args")
