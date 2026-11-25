@@ -97,6 +97,8 @@ class AsyncLLMEngine(Protocol):
         self, weights: Mapping[str, Shaped[Tensor, "..."]]
     ) -> None: ...
 
+    async def reset_prefix_cache(self) -> None: ...
+
 
 @dataclass
 class RolloutConfig:

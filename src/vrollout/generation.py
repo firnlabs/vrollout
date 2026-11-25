@@ -176,6 +176,9 @@ class RolloutWorker:
     ) -> None:
         """Updates engine weights asynchronously, bumping weights version.
 
+        Also drops the engine's prefix cache, so no prompt reuses KV values that the
+        previous weights computed.
+
         Args:
             weights: Full actor state dict to load into the engine.
 
@@ -189,7 +192,23 @@ class RolloutWorker:
                 "are generating"
             )
         await self._llm_engine.update_weights(weights)
+        # a reload keeps the prefix cache, whose KV values the old weights computed
+        await self._llm_engine.reset_prefix_cache()
         self._weights_version += 1
+
+    async def reset_prefix_cache(self) -> None:
+        """Drops the engine's cached prompt prefixes.
+
+        Raises:
+            RuntimeError: If a batch is still generating, whose requests hold the
+                cached blocks.
+        """
+        if self._batches_in_flight:
+            raise RuntimeError(
+                f"Cannot reset the prefix cache while {self._batches_in_flight} "
+                "batch(es) are generating"
+            )
+        await self._llm_engine.reset_prefix_cache()
 
     def get_status(self) -> RolloutWorkerStatus:
         """Returns snapshot of worker status."""
@@ -290,6 +309,10 @@ class RolloutManager:
         """Broadcasts updated weights to all remote Ray workers via Ray object store."""
         ref = ray.put(weights)
         ray.get([w.update_weights.remote(ref) for w in self._workers])  # ty: ignore[unresolved-attribute]
+
+    def reset_prefix_cache(self) -> None:
+        """Drops the cached prompt prefixes of every remote Ray worker."""
+        ray.get([w.reset_prefix_cache.remote() for w in self._workers])  # ty: ignore[unresolved-attribute]
 
     @property
     def workers(self) -> list[ActorProxy[RolloutWorker]]:
