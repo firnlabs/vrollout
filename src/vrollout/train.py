@@ -124,7 +124,7 @@ def _run_evaluation(
     eval_prompts: list[str],
     max_tokens: int,
 ) -> tuple[float, list[scorer.ScoredRollout]]:
-    """Runs deterministic greedy evaluation on held-out prompts.
+    """Runs greedy evaluation on held-out prompts.
 
     Args:
         rollout_pipeline: Pipeline that generates and scores the eval rollouts.

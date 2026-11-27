@@ -1,4 +1,4 @@
-"""Implements the GRPO (Generalized Reward Policy Optimization) algorithm.
+"""Implements the GRPO (Group Relative Policy Optimization) algorithm.
 
 Reference:
     - Shao, et al. (2024). DeepSeekMath: Pushing the Limits of Mathematical Reasoning
@@ -82,10 +82,11 @@ def compute_grpo_loss(
 
     Args:
         log_probs: Current log probabilities of the policy.
-        old_log_probs: Log probabilities of the policy from the previous iteration.
+        old_log_probs: Log probabilities of the sampling policy pi_old, as reported
+            by the sampler for the generated tokens.
         ref_log_probs: Log probabilities of the reference policy.
         advantages: Advantage estimates for each sequence.
-        completion_mask: Boolean mask indicating True forvalid tokens; False otherwise.
+        completion_mask: Boolean mask indicating True for valid tokens; False otherwise.
         clip_eps: Clipping epsilon for the policy surrogate.
         beta: Coefficient for the KL divergence term.
         num_valid_tokens: Normalizer for the summed per-token loss, typically the
@@ -97,7 +98,7 @@ def compute_grpo_loss(
         A tuple containing the computed loss and metrics.
 
     Raises:
-        ValueError: if there are no valid tokens in the completion mask.
+        ValueError: If there are no valid tokens in the completion mask.
     """
     total_valid_tokens = (
         completion_mask.sum() if num_valid_tokens is None else num_valid_tokens

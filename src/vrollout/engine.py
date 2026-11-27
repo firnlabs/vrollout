@@ -70,7 +70,7 @@ class TrainIterationMetrics:
         avg_kl: Mean per-token KL divergence between the actor and the reference
             policy.
         avg_clip_fraction: Fraction of completion tokens whose importance ratio
-            fell outside ``[1 - clip_eps, 1 + clip_eps]``.
+            fell outside `[1 - clip_eps, 1 + clip_eps]`.
         avg_logprob_abs_diff: Mean per-token absolute difference between the
             current policy's and the old policy's log-probs.
         avg_mismatch_kl: Mean per-token k3 estimate of KL(pi_old || pi) between

@@ -39,7 +39,7 @@ class ToyModel(nn.Module):
         | Float[Tensor, "batch seq_len"]
         | None = None,
     ) -> Float[Tensor, "batch seq_len vocab_size"]:
-        _ = attention_mask  # unused: kept for API compatiblity
+        _ = attention_mask  # unused: kept for API compatibility
         x = self.embedding(input_ids)
         for layer in self.layers:
             x = layer(x)

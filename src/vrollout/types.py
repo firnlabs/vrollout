@@ -26,7 +26,7 @@ class SamplingParams(Protocol):
     """LLM sampling parameters for generation.
 
     Reference:
-    - https://docs.vllm.ai/en/v0.6.0/dev/sampling_params.html
+    - vLLM 0.27.1: https://docs.vllm.ai/en/v0.27.1/api/vllm/sampling_params/
     """
 
     temperature: float
