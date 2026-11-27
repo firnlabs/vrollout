@@ -73,7 +73,7 @@ def _parse_vllm_output_to_rollouts(
 
 
 def _create_llm_engine(config: RolloutConfig) -> AsyncLLMEngine:
-    """Creates a default vLLM AsyncLLMEngine instance from configuration."""
+    """Creates the mock or vLLM engine selected by the backend and model name."""
     is_mock = config.backend == "mock" or (
         config.backend is None and config.model_name.startswith("test")
     )

@@ -1,4 +1,9 @@
-"""Generalized advantage estimation (GAE)."""
+"""Generalized advantage estimation (GAE).
+
+Reference:
+    - Schulman, et al. (2015). High-Dimensional Continuous Control Using Generalized
+      Advantage Estimation. https://arxiv.org/abs/1506.02438
+"""
 
 from beartype import beartype
 from jaxtyping import Float
@@ -23,7 +28,7 @@ def compute_gae_torch(
 ]:
     """Computes Generalized Advantage Estimation (GAE) using PyTorch primitives.
 
-    Follows Schulman et al. (2015), Eq. (11)-(12) with sequence masking.
+    Follows Schulman et al. (2015), Eq. (16) with sequence masking.
 
     Returns a tuple of `(advantages, target_values)` where:
         - advantages: Advantage estimates masked beyond completion lengths.
